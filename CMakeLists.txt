@@ -104,7 +104,9 @@ add_library(engine STATIC
             src/engine/ecs/EntityManager.cpp
             src/engine/ecs/EntityView.cpp
             src/engine/ecs/SystemManager.cpp
-            src/engine/math/Vec2.cpp)
+            src/engine/graphics/SfmlRenderer.cpp
+            src/engine/math/Vec2.cpp
+            src/engine/systems/RenderSystem.cpp)
 
 target_include_directories(engine PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -166,4 +168,12 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(runtime_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME runtime.timing_transform COMMAND runtime_test)
     set_tests_properties(runtime.timing_transform PROPERTIES TIMEOUT 60)
+
+    # Rendering: the transform-to-render mapping, RenderSystem, and a real
+    # graphics integration check that reads back pixels.
+    add_executable(render_test tests/RenderTest.cpp)
+    target_link_libraries(render_test PRIVATE engine)
+    target_compile_options(render_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME render.foundation COMMAND render_test)
+    set_tests_properties(render.foundation PROPERTIES TIMEOUT 60)
 endif()

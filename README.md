@@ -6,46 +6,48 @@ This is an **incremental** project. It is built one phase at a time, and each
 phase adds a single engine subsystem on top of a foundation that already builds
 and runs.
 
-## Current phase: 5 — Runtime Timing + Transform
+## Current phase: 6 — Rendering Foundation
 
-### Phases 1 to 4 (complete)
+### Phases 1 to 5 (complete)
 
 - **Phase 1 — Project Foundation:** CMake project, SFML window, main loop with a
   clean update/render split.
-- **Phase 2 — Math Foundation:** `engine::Vec2`, the engine's own 2D vector,
-  described in detail below.
+- **Phase 2 — Math Foundation:** `engine::Vec2`, the engine's own 2D vector.
 - **Phase 3 — ECS Core:** `Entity`, `ComponentStorage`, `EntityManager`,
   `EntityView`.
 - **Phase 4 — ECS Systems + Component Queries:** `Query<A, B>()`, `System`,
   `SystemManager`.
+- **Phase 5 — Runtime Timing + Transform:** `Time`, `System::update(world, dt)`,
+  `components::Transform`.
 
-### Phase 5 — Runtime Timing + Transform (current)
+### Phase 6 — Rendering Foundation (current)
 
-- `engine::Time`: per-frame delta in seconds, first frame zero, clamped to 0.1 s.
-- `System::update(EntityManager&, float deltaSeconds)` — timing is a parameter,
-  never a global or a singleton clock.
-- `engine::components::Transform`: the engine's first real component, pure data.
-- `Application` is now the composition root for window + time + world + systems.
-- **See [docs/runtime.md](docs/runtime.md)** for the frame lifecycle, the
-  delta-time contract, clamping, and the Transform component.
+- `graphics::Renderer`, an SFML-free interface; `graphics::SfmlRenderer`, the
+  only place SFML is included for rendering.
+- `components::Rectangle`, the first renderable component, and
+  `engine::Color` so components carry no SFML type.
+- `graphics::RenderTransform` and the pure `toRenderTransform` conversion.
+- `systems::RenderSystem`, which queries the ECS and submits draws.
+- **See [docs/rendering.md](docs/rendering.md)** for the coordinate contract,
+  the angle-conversion rule, the position convention, ownership and limitations.
 
-Components remain pure data, entities remain bare identities, and all behaviour
-lives in systems. Still no gameplay systems: rendering, physics, collision, input,
-animation, cameras, audio, particles, scenes and asset management are all later
-phases.
-
-The runtime now looks like this:
+The pipeline the phases have been building towards now runs end to end:
 
 ```text
-Application
-    ↓  time.tick()                    measures the frame
-    ↓  systemManager.update(world, dt)
+Entity + Transform + Rectangle
+    ↓  query<Transform, Rectangle>()
+RenderSystem          ← behaviour
+    ↓  toRenderTransform()  (radians → degrees, at the boundary)
+Renderer              ← interface, no SFML types
     ↓
-Systems  (behaviour)
-    ↓  query<Transform>()
+SFML window
     ↓
-Components  (data)  →  Vec2
+a visible rectangle
 ```
+
+Still no gameplay beyond that: texture loading, asset management, animation,
+sprites, cameras, shaders, particles, physics, collision, input, audio and scenes
+are all later phases.
 
 ## Requirements
 
@@ -135,19 +137,26 @@ cd build && ctest --output-on-failure
 | `math.vec2` | every `engine::Vec2` operation, including the zero-vector and division-by-zero contracts |
 | `ecs.core` | entity lifetime, id uniqueness, tags, component storage, error behaviour and deferred destruction |
 | `ecs.systems` | component queries, const-query safety, system execution order and ownership |
-| `runtime.timing_transform` | frame timing, delta clamping, the `Transform` component, and the full time→system→query→component chain |
+| `render.foundation` | the transform-to-render mapping, `RenderSystem` filtering, and real pixel readback from a real window |
 
 Phase 1 had no logic worth unit testing, so the meaningful check there was that
 the application builds, runs and shuts down cleanly. Later phases added
-`math.vec2` (18 groups), `ecs.core` (26), `ecs.systems` (22) and
-`runtime.timing_transform` (22). Each group is reported individually with a
-`file:line` for every failing check. Tests use the plain-C++-executable style
-already in the project: no external test framework, no new dependencies.
+`math.vec2` (18 groups), `ecs.core` (26), `ecs.systems` (22),
+`runtime.timing_transform` (22) and `render.foundation` (24). Each group is
+reported individually with a `file:line` for every failing check. Tests use the
+plain-C++-executable style already in the project: no external test framework, no
+new dependencies.
 
 Timing tests never sleep. `Time::advance()` takes an explicit duration, so the
 clamping and accounting rules are verified deterministically on any machine; the
 one test that touches the real clock asserts only that it is wired up, using a
 generous tolerance.
+
+The render suite is split deliberately: mapping, filtering and frame protocol are
+unit tested against a recording renderer with no window, while colour, position,
+scale, rotation and clamping are checked by reading back actual pixels from a
+real SFML window. See [docs/rendering.md](docs/rendering.md) for exactly what is
+and is not verified automatically.
 
 The `game` executable accepts an optional `--frames <count>` argument, used by
 the end-to-end test to stop the loop on its own instead of waiting for someone
@@ -241,9 +250,11 @@ Re-run CMake after changing one of them.
 │   └── engine.config.cmake.in  template for the generated engine config header
 ├── include/engine/             public engine headers
 │   ├── Application.hpp
-│   ├── Time.hpp               frame timing, delta in seconds
+│   ├── Color.hpp               engine colour, channels in [0, 1]
+│   ├── Time.hpp                frame timing, delta in seconds
 │   ├── components/
-│   │   └── Transform.hpp      first real component: pure data
+│   │   ├── Rectangle.hpp       first renderable component: pure data
+│   │   └── Transform.hpp       first real component: pure data
 │   ├── ecs/
 │   │   ├── ComponentStorage.hpp type-erased, owning component storage
 │   │   ├── Entity.hpp          identity, tag, liveness, components
@@ -252,29 +263,41 @@ Re-run CMake after changing one of them.
 │   │   ├── Query.hpp           component queries: query<A, B>()
 │   │   ├── System.hpp          behaviour interface
 │   │   └── SystemManager.hpp   owns systems, runs them in order
+│   ├── graphics/
+│   │   ├── RenderTransform.hpp Transform -> render space, SFML free
+│   │   ├── Renderer.hpp        graphics interface, no SFML types
+│   │   └── SfmlRenderer.hpp    forward declares sf::RenderWindow only
 │   ├── math/
 │   │   └── Vec2.hpp            2D vector, independent of SFML
+│   ├── systems/
+│   │   └── RenderSystem.hpp    draws Transform + Rectangle entities
 │   └── EngineConfig.hpp        (generated into build/, not in the source tree)
 ├── src/
 │   ├── main.cpp                entry point: parses arguments, owns Application
 │   └── engine/
-│       ├── Application.cpp     window, timing, world and systems, in order
+│       ├── Application.cpp     window, timing, world, systems, render pass
 │       ├── Time.cpp
 │       ├── ecs/
 │       │   ├── ComponentStorage.cpp
 │       │   ├── EntityManager.cpp
 │       │   ├── EntityView.cpp
 │       │   └── SystemManager.cpp
-│       └── math/
-│           └── Vec2.cpp        operations needing sqrt, atan2, sin, cos
+│       ├── graphics/
+│       │   └── SfmlRenderer.cpp the one file that includes SFML for rendering
+│       ├── math/
+│       │   └── Vec2.cpp        operations needing sqrt, atan2, sin, cos
+│       └── systems/
+│           └── RenderSystem.cpp
 ├── tests/
 │   ├── ApplicationSmokeTest.cpp
 │   ├── Vec2Test.cpp
 │   ├── EcsTest.cpp
 │   ├── EcsSystemsTest.cpp
-│   └── RuntimeTest.cpp
+│   ├── RuntimeTest.cpp
+│   └── RenderTest.cpp
 ├── docs/
 │   ├── ecs.md                  ECS design and lifetime rules
+│   ├── rendering.md            render architecture and coordinate contract
 │   └── runtime.md              frame lifecycle, timing, Transform
 ├── assets/                     reserved for textures, fonts, sounds (later phases)
 ├── shaders/                    reserved for GLSL shaders (later phases)
@@ -345,4 +368,20 @@ Re-run CMake after changing one of them.
 - `engine::components::Transform` has **no member functions**. The test suite
   asserts at compile time that it is an aggregate, trivially copyable and
   standard layout, so "components are data" is enforced rather than promised.
+- `graphics::Renderer` is an interface with no SFML types, so `RenderSystem` can
+  be tested against a recording fake with no window. `SfmlRenderer.hpp` only
+  forward declares `sf::RenderWindow`; every real SFML type is confined to
+  `SfmlRenderer.cpp`.
+- `engine::Color` and `Vec2` exist so components carry no SFML type. Colour
+  channels are `[0, 1]` floats and are clamped at the boundary.
+- Engine angles stay in radians. `Transform` is **not** converted to degrees to
+  suit SFML; the conversion happens once, in `toRenderTransform`, and the sign is
+  deliberately not flipped because engine and screen space share the same axes.
+- `Transform.position` is the **centre** of the object. SFML anchors rectangles
+  at the top-left, so the renderer applies `setOrigin(size * 0.5f)` rather than
+  adding an anchor field to a component.
+- `RenderSystem` is deliberately not registered in the `SystemManager`: the render
+  pass has to be bracketed by `beginFrame`/`endFrame` and run after simulation.
+  It is still a plain `System`. The reasoning is in
+  [docs/rendering.md](docs/rendering.md) §4.
 # Game-Engine

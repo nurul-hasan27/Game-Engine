@@ -1,15 +1,30 @@
 #include "engine/Application.hpp"
 #include "engine/EngineConfig.hpp"
 
-#include <SFML/Graphics/Color.hpp>
-
 #include <cstdlib>
 
 namespace engine
 {
+namespace
+{
+
+/// Builds an engine colour from the configured 0-255 background channels.
+[[nodiscard]] constexpr Color toColor(const unsigned char red, const unsigned char green,
+                                       const unsigned char blue) noexcept
+{
+    return Color{static_cast<float>(red) / 255.0F, static_cast<float>(green) / 255.0F,
+                 static_cast<float>(blue) / 255.0F, 1.0F};
+}
+
+/// The background the renderer clears to, still driven by the Phase 1 config.
+constexpr Color kWindowBackground = toColor(config::kBackgroundColorRed, config::kBackgroundColorGreen,
+                                            config::kBackgroundColorBlue);
+
+} // namespace
 
 Application::Application()
-    : m_window(sf::VideoMode{config::kWindowWidth, config::kWindowHeight}, config::kWindowTitle)
+    : m_window(sf::VideoMode{config::kWindowWidth, config::kWindowHeight}, config::kWindowTitle), m_time{},
+      m_entityManager{}, m_systemManager{}, m_renderer{m_window}, m_renderSystem{m_renderer}, m_isRunning{true}
 {
     m_window.setFramerateLimit(config::kFramerateLimit);
 }
@@ -77,13 +92,13 @@ void Application::update()
 
 void Application::render()
 {
-    // sf::Color is not a literal type in SFML 2.6, so it cannot be constexpr.
-    const sf::Color background{config::kBackgroundColorRed,
-                               config::kBackgroundColorGreen,
-                               config::kBackgroundColorBlue};
-
-    m_window.clear(background);
-    m_window.display();
+    // The render pass: begin, clear to the configured background, let the render
+    // system submit its draws, then present. Application performs no drawing
+    // itself; it only sequences the pass.
+    m_renderer.beginFrame();
+    m_renderer.clear(kWindowBackground);
+    m_renderSystem.update(m_entityManager, 0.0F);
+    m_renderer.endFrame();
 }
 
 } // namespace engine

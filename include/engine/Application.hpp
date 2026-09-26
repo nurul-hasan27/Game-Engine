@@ -3,6 +3,8 @@
 #include "engine/Time.hpp"
 #include "engine/ecs/EntityManager.hpp"
 #include "engine/ecs/SystemManager.hpp"
+#include "engine/graphics/SfmlRenderer.hpp"
+#include "engine/systems/RenderSystem.hpp"
 
 #include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/Window/Event.hpp>
@@ -23,26 +25,52 @@ namespace engine
 /// | `sf::RenderWindow` | the window, its events, and presentation |
 /// | `Time` | measures how long each frame actually took |
 /// | `EntityManager` | the world: every entity and its components |
-/// | `SystemManager` | the behaviour, run in registration order |
+/// | `SystemManager` | the simulation systems, run in registration order |
+/// | `SfmlRenderer` | the graphics boundary; references the window |
+/// | `RenderSystem` | draws the world through the renderer |
 ///
-/// Application is the only place these four are wired together. It does not
-/// implement any behaviour of its own: there is no physics, no rendering logic
-/// and no gameplay here, only ordering. The window is the one genuinely
-/// SFML-dependent member, which is what keeps SFML confined to this boundary.
+/// Application is the only place these are wired together. It implements no
+/// behaviour of its own: there is no physics, no gameplay and no drawing code
+/// here, only ordering.
+///
+/// ### Window ownership
+///
+/// The window belongs to Application and nobody else. `SfmlRenderer` holds a
+/// **reference** to it rather than owning it, and `RenderSystem` holds a
+/// reference to the renderer. Ownership therefore runs in one direction only,
+/// Application to window, with everything else borrowing. The window's
+/// destructor still closes it, so shutdown is still plain RAII: no global
+/// window, no static window, no singleton renderer, no global graphics context.
+///
+/// Member declaration order matters here: the window is declared first so it is
+/// constructed first, and the renderer and render system bind to an already
+/// constructed window. Destruction runs in reverse, so they go before the window
+/// closes.
 ///
 /// ### The frame
 ///
 /// ```text
 /// processEvents()                  -> window.isOpen() becomes false on close
 /// time.tick()                      -> measures this frame's real duration
-/// systemManager.update(world, dt)  -> behaviour writes component data
+/// systemManager.update(world, dt)  -> simulation systems write component data
 /// entityManager.update()           -> deferred destruction cleanup
-/// render()                         -> draw
+/// renderer.beginFrame()            -> RENDER: start the frame
+/// renderer.clear(background)       -> RENDER: configured background colour
+/// renderSystem.update(world, 0)    -> RENDER: submit draws
+/// renderer.endFrame()              -> RENDER: present
 /// ```
 ///
-/// Systems run before cleanup on purpose. A system that asks for an entity to
-/// die only sets a flag, and the erase happens in `entityManager.update()`
-/// afterwards, so nothing is removed from underneath a running system.
+/// The event, update, render, display high-level order from Phase 1 is intact.
+/// Systems run before cleanup, so an entity a system flagged this frame is
+/// erased only once nothing is iterating.
+///
+/// `RenderSystem` is deliberately **not** registered in the `SystemManager`. It
+/// is an ordinary `System` with the same interface and lifetime rules, but the
+/// render pass has to be bracketed by `beginFrame()` and `endFrame()` and has to
+/// run after every simulation system, so `Application` drives it in its own
+/// pass. Folding it into the simulation list would mean either clearing mid
+/// simulation or presenting before the last system ran. This is recorded in
+/// [docs/rendering.md](docs/rendering.md).
 class Application
 {
 public:
@@ -76,15 +104,24 @@ public:
     /// the delta as a parameter and should not need this.
     [[nodiscard]] const Time& time() const noexcept { return m_time; }
 
+    /// The graphics boundary, for a debug overlay or a tool. Systems should be
+    /// handed an `engine::graphics::Renderer&` instead of reaching for this.
+    [[nodiscard]] graphics::Renderer& renderer() noexcept { return m_renderer; }
+
 private:
     void processEvents();
     void update();
     void render();
 
+    // Declaration order is load bearing: the window is constructed first, then
+    // the renderer binds to it, then the render system binds to the renderer.
+    // Destruction is the reverse, so neither borrower outlives what it points at.
     sf::RenderWindow m_window;
     Time m_time;
     ecs::EntityManager m_entityManager;
     ecs::SystemManager m_systemManager;
+    graphics::SfmlRenderer m_renderer;
+    systems::RenderSystem m_renderSystem;
     bool m_isRunning = true;
 };
 
