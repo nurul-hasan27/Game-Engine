@@ -102,6 +102,7 @@ add_library(engine STATIC
             src/engine/ecs/ComponentStorage.cpp
             src/engine/ecs/EntityManager.cpp
             src/engine/ecs/EntityView.cpp
+            src/engine/ecs/SystemManager.cpp
             src/engine/math/Vec2.cpp)
 
 target_include_directories(engine PUBLIC
@@ -150,4 +151,11 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(ecs_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME ecs.core COMMAND ecs_test)
     set_tests_properties(ecs.core PROPERTIES TIMEOUT 60)
+
+    # ECS systems and component queries.
+    add_executable(ecs_systems_test tests/EcsSystemsTest.cpp)
+    target_link_libraries(ecs_systems_test PRIVATE engine)
+    target_compile_options(ecs_systems_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME ecs.systems COMMAND ecs_systems_test)
+    set_tests_properties(ecs.systems PROPERTIES TIMEOUT 60)
 endif()

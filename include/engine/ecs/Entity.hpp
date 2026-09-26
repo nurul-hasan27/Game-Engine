@@ -151,6 +151,19 @@ public:
         return m_components.find<T>();
     }
 
+    /// Returns a read-only pointer to the component of type T, or nullptr if
+    /// absent.
+    ///
+    /// This is the accessor a const query uses. It exists so that const-correct
+    /// access at the EntityManager level can be honoured without a const_cast:
+    /// m_components is mutable, so reaching for it through std::as_const is
+    /// what selects ComponentStorage's const find() overload.
+    template <typename T>
+    [[nodiscard]] const T* tryGetConstComponent() const noexcept
+    {
+        return std::as_const(m_components).find<T>();
+    }
+
     /// Removes the component of type T.
     ///
     /// Throws std::logic_error if the component is absent, because removing

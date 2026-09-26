@@ -6,31 +6,29 @@ This is an **incremental** project. It is built one phase at a time, and each
 phase adds a single engine subsystem on top of a foundation that already builds
 and runs.
 
-## Current phase: 3 — ECS Core
+## Current phase: 4 — ECS Systems + Component Queries
 
-### Phase 1 — Project Foundation (complete)
+### Phases 1 to 3 (complete)
 
-- a buildable CMake project with Debug and Release support
-- an SFML window that opens and closes
-- a main loop that separates event processing, updating and rendering
-- a configurable window (size, title, background colour)
-- clean shutdown, and a smoke test that proves both
+- **Phase 1 — Project Foundation:** CMake project, SFML window, main loop with a
+  clean update/render split.
+- **Phase 2 — Math Foundation:** `engine::Vec2`, the engine's own 2D vector,
+  described in detail below.
+- **Phase 3 — ECS Core:** `engine::ecs::Entity`, `ComponentStorage`,
+  `EntityManager` and `EntityView`.
 
-### Phase 2 — Math Foundation (complete)
+### Phase 4 — ECS Systems + Component Queries (current)
 
-- `engine::Vec2`, the engine's own 2D vector, described in detail below
+- `engine::ecs::Query`: `query<A>()`, `query<A, B>()`, `query<A, B, C>()`,
+  yielding `(entity, components...)` with no copies and no allocation.
+- `engine::ecs::System` and `engine::ecs::SystemManager`: behaviour, registration
+  and deterministic execution order.
+- **See [docs/ecs.md](docs/ecs.md)** for the full design, query lifetime, the
+  structural-mutation policy and current limitations.
 
-### Phase 3 — ECS Core (current)
-
-- `engine::ecs::Entity`, `ComponentStorage` and `EntityManager`
-- stable unique ids, tags, component storage, deferred destruction
-- **See [docs/ecs.md](docs/ecs.md)** for the full design, the component and
-  entity lifetime rules, and current limitations
-
-Deliberately **not** implemented yet: systems of any kind, movement, physics,
-collision, input, asset management, animation, scenes, level loading, cameras,
-ray casting, AI, events, save/load, shaders, particles and gameplay. Those
-belong to later phases.
+Components remain pure data and entities remain bare identities; all behaviour
+lives in systems. No gameplay systems exist yet — rendering, physics, collision,
+input, animation, cameras, audio, particles and scenes are all later phases.
 
 ## Requirements
 
@@ -119,13 +117,14 @@ cd build && ctest --output-on-failure
 | `application.end_to_end` | the shipped `game` executable starts through its own `main()` and exits cleanly |
 | `math.vec2` | every `engine::Vec2` operation, including the zero-vector and division-by-zero contracts |
 | `ecs.core` | entity lifetime, id uniqueness, tags, component storage, error behaviour and deferred destruction |
+| `ecs.systems` | component queries, const-query safety, system execution order and ownership |
 
 Phase 1 had no logic worth unit testing, so the meaningful check there was that
-the application builds, runs and shuts down cleanly. Phase 2 adds real math
-logic, so `math.vec2` covers it in 18 groups. Phase 3 adds the ECS, covered by
-`ecs.core` in 26 groups. Each group is reported individually with a `file:line`
-for every failing check. Tests use the plain-C++-executable style already in the
-project: no external test framework, no new dependencies.
+the application builds, runs and shuts down cleanly. Phase 2 added `math.vec2`
+(18 groups), Phase 3 added `ecs.core` (26 groups) and Phase 4 added
+`ecs.systems` (19 groups). Each group is reported individually with a
+`file:line` for every failing check. Tests use the plain-C++-executable style
+already in the project: no external test framework, no new dependencies.
 
 The `game` executable accepts an optional `--frames <count>` argument, used by
 the end-to-end test to stop the loop on its own instead of waiting for someone
@@ -223,7 +222,10 @@ Re-run CMake after changing one of them.
 │   │   ├── ComponentStorage.hpp type-erased, owning component storage
 │   │   ├── Entity.hpp          identity, tag, liveness, components
 │   │   ├── EntityManager.hpp   owns every entity, decides lifetime
-│   │   └── EntityView.hpp      non-owning filtered range over live entities
+│   │   ├── EntityView.hpp      non-owning filtered range over live entities
+│   │   ├── Query.hpp           component queries: query<A, B>()
+│   │   ├── System.hpp          behaviour interface
+│   │   └── SystemManager.hpp   owns systems, runs them in order
 │   ├── math/
 │   │   └── Vec2.hpp            2D vector, independent of SFML
 │   └── EngineConfig.hpp        (generated into build/, not in the source tree)
@@ -234,13 +236,15 @@ Re-run CMake after changing one of them.
 │       ├── ecs/
 │       │   ├── ComponentStorage.cpp
 │       │   ├── EntityManager.cpp
-│       │   └── EntityView.cpp
+│       │   ├── EntityView.cpp
+│       │   └── SystemManager.cpp
 │       └── math/
 │           └── Vec2.cpp        operations needing sqrt, atan2, sin, cos
 ├── tests/
 │   ├── ApplicationSmokeTest.cpp
 │   ├── Vec2Test.cpp
-│   └── EcsTest.cpp
+│   ├── EcsTest.cpp
+│   └── EcsSystemsTest.cpp
 ├── docs/
 │   └── ecs.md                  ECS design and lifetime rules
 ├── assets/                     reserved for textures, fonts, sounds (later phases)
@@ -286,4 +290,21 @@ Re-run CMake after changing one of them.
   ComponentStorage. A `const Entity` protects identity, not data, which is what
   allows a system to walk a read-only `const Entity&` view and still change
   component data. See [docs/ecs.md](docs/ecs.md) for the full reasoning.
+- A `Query` is one borrowed pointer and nothing else — no allocation, no
+  materialised collection, no copies — and it yields `std::tuple<Entity&, T&...>`
+  so structured bindings work directly. `query<>` and `query<T, T>()` are
+  rejected at compile time rather than silently returning duplicates.
+- Const-correctness is layered: a `const EntityManager` yields a query of
+  `const` references, and the query's own borrowed pointer is const, so no
+  `const_cast` is needed anywhere. The one remaining seam is that a
+  `const Entity&` can still reach a mutable component through `getComponent<T>()`,
+  which follows from Phase 3's constness decision and is documented rather than
+  hidden.
+- `SystemManager` executes systems in registration order and nothing else — no
+  sorting, no priorities, no dependency graph — so the order is identical on every
+  run and every platform.
+- Writing component data during query iteration is safe because components are
+  individually allocated. Structural changes (`addEntity`, `update`,
+  `addComponent`, `removeComponent`) are documented as unsupported mid-iteration
+  rather than enforced at runtime.
 # Game-Engine

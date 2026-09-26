@@ -99,23 +99,33 @@ you pass to `addComponent<T>()`**, and their type must be usable as a
 
 ---
 
-## 4. What a System will be
+## 4. What a System is
 
-Not implemented yet. The design already assumes this shape:
+A system is the only place behaviour lives. It holds no entities and no component
+data: it is handed the `EntityManager`, queries the components it cares about, and
+writes behaviour into them.
 
 ```cpp
-class MovementSystem
+class MovementSystem final : public ecs::System
 {
 public:
-    void update(ecs::EntityManager& entities, float deltaSeconds);
+    void update(ecs::EntityManager& entities) override
+    {
+        for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
+        {
+            position.value += velocity.value;
+        }
+    }
+
+    [[nodiscard]] const char* name() const override { return "MovementSystem"; }
 };
 ```
 
-A system receives the manager, asks for the entities it cares about, and mutates
-their components. It never creates, destroys or reorders entities itself except
-by asking the manager, and it never caches entity references across a frame
-boundary (see the lifetime rules below). Registration and ordering of systems
-belong to a later phase.
+`System` itself is deliberately empty of data: a virtual destructor, a pure
+`update(EntityManager&)`, and a `name()` for diagnostics. There is no
+"system entity", and a system is not a specialised Entity.
+
+Full detail is in sections 11 to 14.
 
 ---
 
@@ -293,34 +303,221 @@ That is natural for a literal or a named string; it is a trap for a temporary
 `std::string`, which is why `getEntities()` with no tag shares the same code path
 via an empty tag meaning "any".
 
-There is no query language here. Component-based system querying, which is what
-systems will mostly need, is a later phase. Tag lookup exists because it is
-genuinely useful for a designer-facing label and simple to reason about now.
+There is no query language here. Tag lookup exists because it is genuinely useful
+for a designer-facing label and simple to reason about. System-scale selection is
+a different concern and is handled by component queries, below.
 
 ---
 
-## 10. Current limitations
+## 10. Component queries
+
+A tag says "what the designer called it". A component query says "what it is
+made of", which is the question systems actually ask. Both are views over the
+same `EntityManager` storage.
+
+```cpp
+// every alive entity holding a Position
+for (auto&& [entity, position] : entities.query<Position>())
+{
+    ...
+}
+
+// every alive entity holding both a Position and a Velocity
+for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
+{
+    ...
+}
+```
+
+An entity qualifies when it is **alive** and holds **every** requested component.
+Dead entities are skipped exactly as `EntityView` skips them, and an entity
+missing any one of the requested types is excluded. The fold is short-circuiting,
+so once one type is known to be absent the rest are not looked up.
+
+### What a query yields
+
+Dereferencing a query yields a `std::tuple` of the entity followed by a reference
+to each requested component. That works with structured bindings and copies
+nothing:
+
+| Query | Yields |
+| ----- | ------ |
+| `query<Position>()` from a mutable manager | `std::tuple<Entity&, Position&>` |
+| `query<Position>()` from a const manager | `std::tuple<const Entity&, const Position&>` |
+
+### What a query owns
+
+Nothing. A query is a single borrowed pointer to the manager's storage, which the
+test suite pins down at compile time with
+`static_assert(sizeof(Query<false, Position>) == sizeof(void*))`. It allocates
+nothing, materialises no collection, and visits each qualifying entity exactly
+once. A query is also recomputed on every use, so it is a live view rather than a
+snapshot: an entity that gains a component starts matching on the next query.
+
+### Two deliberate restrictions
+
+- `query<>()` with no component types is rejected at compile time.
+- `query<T, T>()` is rejected at compile time, because it would yield two
+  references to the same component. Write `query<T>()` instead.
+
+### Const queries
+
+A `const EntityManager` only ever produces read-only queries, and a read-only
+query yields `const Entity&` plus `const T&` for every component. This is
+enforced by the type system, with no `const_cast` anywhere: the query's borrowed
+pointer is itself const for a read-only query, and it reaches components through
+`Entity::tryGetConstComponent<T>()`.
+
+**One honest seam.** `const Entity&` protects identity, not data, so from an
+entity taken out of a const query you can still call `getComponent<T>()`, which
+returns `T&` by Phase 3's logical-const design. The *query* is const-correct; the
+*entity* is not, by prior decision. Closing that seam would mean changing Entity's
+constness, which is out of scope here, so it is recorded as a limitation rather
+than hidden.
+
+---
+
+## 11. Systems
+
+`System` is the behaviour half of the architecture:
+
+```cpp
+class System
+{
+public:
+    virtual ~System() = default;
+    virtual void update(EntityManager& entities) = 0;
+    [[nodiscard]] virtual const char* name() const = 0;
+};
+```
+
+The base class contains no data. There is no `SystemEntity`, and a system is not
+a kind of entity. A system is handed the manager, queries what it needs, and
+writes behaviour into component data.
+
+### The worked example
+
+```
+Entity
+  ├── PositionComponent { value: Vec2(10, 20) }   DATA
+  └── VelocityComponent { value: Vec2(2, -1) }    DATA
+        │
+        │  query<Position, Velocity>()
+        ↓
+  MovementSystem                                     BEHAVIOUR
+        │
+        │  position.value += velocity.value
+        ↓
+  PositionComponent { value: Vec2(12, 19) }
+```
+
+The components did not move and they did not know anything happened. The
+behaviour lives entirely in `MovementSystem`, which means it can be removed,
+replaced, reordered or run twice without touching a single line of component
+data.
+
+---
+
+## 12. System ownership and execution order
+
+`SystemManager` owns systems, and systems own nothing:
+
+```cpp
+SystemManager systems;
+systems.add<InputSystem>();
+systems.add<MovementSystem>();
+systems.add<PhysicsSystem>();
+systems.update(entities);
+```
+
+- **Ownership is one-directional.** `SystemManager` → `System`. Entities always
+  belong to the `EntityManager`. A system has no entity storage, and destroying
+  the `SystemManager` leaves the world completely intact, which the test suite
+  verifies.
+- **Order is registration order, and nothing else.** No sorting, no priorities,
+  no dependency graph. Systems run where they were added, so the order is the
+  same on every run and every platform. "Input, then movement, then physics" is
+  expressed by adding them in that order.
+- **References stay valid.** `add<S>()` returns a reference that survives further
+  registrations, because each system is separately owned rather than stored by
+  value in a `vector<System>`.
+
+---
+
+## 13. Query lifetime and structural mutation
+
+### Lifetime
+
+A query borrows the manager's storage, so it is valid only while that storage is
+unchanged. It must not be held across a frame boundary; a system creates the
+query it needs, iterates it, and lets it go.
+
+The same `EntityManager::update()` rule from section 7 applies and is the one
+that bites: cleanup erases and move-assigns entities, so any query or entity
+reference taken before `update()` is stale afterwards.
+
+### Structural mutation policy
+
+**Writing component data during iteration is fully supported.** Components are
+individually allocated, so writing through a reference never moves anything and
+never invalidates the iterator.
+
+**Structural changes during iteration are not supported**, because a query holds
+references into the manager's own containers:
+
+| Call | Supported mid-iteration? | Why |
+| ---- | ------------------------ | --- |
+| Writing `position.value = ...` | **Yes** | Component storage is separately allocated and never relocated |
+| `destroyEntity(entity)` | **Yes** | Only sets a flag; the erase happens in `update()` |
+| `addEntity()` | **No** | May move entities, invalidating the iterator |
+| `update()` | **No** | Erases and move-assigns entities |
+| `addComponent()` | **No** | Changes the entity's match set mid-walk |
+| `removeComponent()` | **No** | Removing a component being iterated dangles the reference |
+
+This is documented rather than enforced at runtime. A system that needs to
+create, destroy or re-compose entities should collect those requests and apply
+them after its loop. A deferred command buffer is deliberately **not** built
+yet, because nothing in the engine needs it and it would be speculative.
+
+---
+
+## 14. Current limitations
 
 Honest list of what is deliberately not here yet:
 
-- **No systems.** The ECS provides storage and lifetime only.
-- **No component-based queries.** Only whole-entity views and tag views exist.
-  Systems will need something like "every entity with a `TransformComponent`",
-  which is a later phase.
-- **Linear component lookup.** O(components on this entity). Fine at this scale;
-  a per-entity type index would be the change if profiling ever justified it.
+- **No gameplay systems.** The `System` abstraction and `SystemManager` exist and
+  are proven by test-only systems, but no rendering, physics, collision, input,
+  animation, camera, audio or AI system has been written. Those are later phases.
+- **`update()` has no delta time.** A system is called as `update(EntityManager&)`,
+  so a test system advances state by one step per call. Real systems will need
+  `deltaSeconds`, and the signature will change when the first one does.
+- **A const query is not a hard security boundary.** The query yields
+  `const T&`, but a `const Entity&` taken from it can still reach a mutable
+  component through `getComponent<T>()`, because Entity's constness protects
+  identity rather than data. Fixing this means revisiting Phase 3's constness
+  decision, not adding anything here.
+- **Structural mutation mid-iteration is documented, not enforced.** Nothing
+  stops a system from calling `update()` inside its own loop; the rules are
+  written down and the test suite documents the supported patterns, but there is
+  no runtime guard and no command buffer.
+- **No entity handles.** Code holds `Entity&`, an `EntityView` or a `Query`. None
+  of them survive `update()`, so a system cannot stash an entity across frames.
+  This is a real limitation and will need addressing when systems keep state.
+- **No entity lookup by id.** Ids are stable and never reused, but nothing can
+  resolve an id back to an entity yet.
+- **Linear component lookup.** O(components on this entity) per query step, so a
+  query is O(entities * components). Fine at this scale; a per-entity type index
+  or a cached query would be the change if profiling ever justified it.
 - **One heap allocation per component.** A deliberate simplification of
   ownership. Archetype or sparse-set storage would remove it, but that is
-  explicitly out of scope for this phase.
-- **No component iteration.** You must know the type you want; there is no way
-  to ask an entity what it contains.
-- **No entity handles.** Code holds `Entity&` or an `EntityView`. There is no
-  id-based handle that survives cleanup, so a system cannot stash an entity
-  across frames. That is a limitation, not an oversight, and it will need
-  addressing when systems keep state.
+  explicitly out of scope.
+- **No component iteration.** You must name the types you want; there is no way
+  to ask an entity what it contains, and no way to query "any component".
+- **No queries over the absence of a component.** `query<Position, Velocity>()`
+  means "has both". There is no "has Position but not Velocity".
 - **No structural sharing or prefabs.** Every `addEntity` builds from scratch.
 - **No serialization.** Component data cannot be saved or loaded.
 - **Single-threaded.** No synchronisation anywhere, by design.
-- **No SFML dependency.** The ECS is engine logic and knows nothing about
-  rendering; the boundary conversion from `Vec2` to `sf::Vector2f` belongs to
-  whichever later phase first draws something.
+- **No SFML dependency.** The ECS and the system layer are engine logic and know
+  nothing about rendering; the boundary conversion from `Vec2` to `sf::Vector2f`
+  belongs to whichever later phase first draws something.

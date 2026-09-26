@@ -2,6 +2,7 @@
 
 #include "engine/ecs/Entity.hpp"
 #include "engine/ecs/EntityView.hpp"
+#include "engine/ecs/Query.hpp"
 
 #include <cstddef>
 #include <deque>
@@ -63,6 +64,41 @@ public:
     /// entity, which is what lets getEntities() and getEntities(tag) share one
     /// implementation.
     [[nodiscard]] EntityView getEntities(std::string_view tag) const;
+
+    /// All alive entities that hold every one of the requested component types.
+    ///
+    /// Yields the entity followed by a reference to each requested component:
+    ///
+    /// ```cpp
+    /// for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
+    /// {
+    ///     position.value += velocity.value;
+    /// }
+    /// ```
+    ///
+    /// The query owns nothing, allocates nothing and visits each qualifying
+    /// entity once. Listing the same component type twice is rejected at compile
+    /// time, and query<> with no types is rejected too.
+    ///
+    /// Because this overload is on a non-const manager, the components it
+    /// yields are mutable: writing to them is the point of a system.
+    template <typename... Ts>
+    [[nodiscard]] Query<false, Ts...> query()
+    {
+        return Query<false, Ts...>{&m_entities};
+    }
+
+    /// Read-only counterpart of query().
+    ///
+    /// A const manager yields a query of const component references, so a
+    /// read-only world genuinely cannot be modified through it. This is the
+    /// manager-level guarantee; Entity's own constness, which protects identity
+    /// rather than data, is unchanged.
+    template <typename... Ts>
+    [[nodiscard]] Query<true, Ts...> query() const
+    {
+        return Query<true, Ts...>{&m_entities};
+    }
 
     /// Requests destruction of `entity`. The entity is flagged dead immediately
     /// and stops appearing in views, but is only erased by update().
