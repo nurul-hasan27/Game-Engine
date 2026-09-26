@@ -99,6 +99,9 @@ endif()
 # examples and the tests can each provide their own entry point.
 add_library(engine STATIC
             src/engine/Application.cpp
+            src/engine/ecs/ComponentStorage.cpp
+            src/engine/ecs/EntityManager.cpp
+            src/engine/ecs/EntityView.cpp
             src/engine/math/Vec2.cpp)
 
 target_include_directories(engine PUBLIC
@@ -140,4 +143,11 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(vec2_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME math.vec2 COMMAND vec2_test)
     set_tests_properties(math.vec2 PROPERTIES TIMEOUT 60)
+
+    # ECS test: entity lifetime, component storage, tags and deferred destruction.
+    add_executable(ecs_test tests/EcsTest.cpp)
+    target_link_libraries(ecs_test PRIVATE engine)
+    target_compile_options(ecs_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME ecs.core COMMAND ecs_test)
+    set_tests_properties(ecs.core PROPERTIES TIMEOUT 60)
 endif()
