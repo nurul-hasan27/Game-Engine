@@ -53,7 +53,13 @@ public:
     [[nodiscard]] std::size_t systemCount() const noexcept { return m_systems.size(); }
 
     /// Runs every registered system once, in registration order.
-    void update(EntityManager& entities);
+    ///
+    /// @param entities The world to hand to each system. Owned by the caller.
+    /// @param deltaSeconds Seconds elapsed since the previous frame. Passed
+    ///        unchanged to every system, so all of them see the same value for
+    ///        the same frame. Measured by engine::Time; see System for why the
+    ///        delta is a parameter rather than something systems look up.
+    void update(EntityManager& entities, float deltaSeconds);
 
 private:
     // unique_ptr so that adding a system does not move the systems already

@@ -62,8 +62,17 @@ void Application::processEvents()
 
 void Application::update()
 {
-    // Nothing to simulate yet: no entities, no physics, no scene. The step
-    // exists so the loop already has a clear update/render split.
+    // Measure the frame that just happened. This is real elapsed time, not
+    // 1 / targetFps: the frame rate cap is a rendering decision and gameplay
+    // correctness must not depend on it.
+    m_time.tick();
+
+    // Behaviour: every system gets the same delta for this frame.
+    m_systemManager.update(m_entityManager, m_time.deltaSeconds());
+
+    // Deferred destruction cleanup, after systems have run, so an entity a
+    // system flagged this frame is erased only once nothing is iterating.
+    m_entityManager.update();
 }
 
 void Application::render()

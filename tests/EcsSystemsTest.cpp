@@ -52,8 +52,9 @@ struct Label
 class MovementSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities) override
+    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
     {
+        (void)deltaSeconds; // this system advances by a fixed step, not by time
         for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
         {
             (void)entity;
@@ -70,8 +71,9 @@ class HealthDecaySystem final : public engine::ecs::System
 public:
     explicit HealthDecaySystem(int amount) : m_amount{amount} {}
 
-    void update(engine::ecs::EntityManager& entities) override
+    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
     {
+        (void)deltaSeconds; // deliberate: proves a system may ignore time
         for (auto&& [entity, health] : entities.query<Health>())
         {
             (void)entity;
@@ -92,9 +94,10 @@ class RecordingSystem final : public engine::ecs::System
 public:
     RecordingSystem(std::vector<std::string>& log, std::string label) : m_log{&log}, m_label{std::move(label)} {}
 
-    void update(engine::ecs::EntityManager& entities) override
+    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
     {
         (void)entities;
+        (void)deltaSeconds;
         m_log->push_back(m_label);
     }
 
@@ -111,8 +114,9 @@ class CountingSystem final : public engine::ecs::System
 public:
     explicit CountingSystem(std::size_t& count) : m_count{&count} {}
 
-    void update(engine::ecs::EntityManager& entities) override
+    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
     {
+        (void)deltaSeconds;
         for ([[maybe_unused]] auto&& entry : entities.query<Position, Velocity>())
         {
             ++(*m_count);
@@ -123,6 +127,25 @@ public:
 
 private:
     std::size_t* m_count;
+};
+
+/// Records the delta it was handed each frame, proving that timing reaches
+/// systems and that every one of them sees the same value.
+class DeltaRecordingSystem final : public engine::ecs::System
+{
+public:
+    explicit DeltaRecordingSystem(std::vector<float>& deltas) : m_deltas{&deltas} {}
+
+    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    {
+        (void)entities;
+        m_deltas->push_back(deltaSeconds);
+    }
+
+    [[nodiscard]] const char* name() const override { return "DeltaRecordingSystem"; }
+
+private:
+    std::vector<float>* m_deltas;
 };
 
 // ---------------------------------------------------------------------------
@@ -151,6 +174,11 @@ using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::ecs::Query;
 using engine::ecs::SystemManager;
+
+/// The frame delta these tests pretend to be running at. Explicit values only:
+/// nothing here sleeps or reads a clock, so the results are identical on every
+/// machine. 0.016 s is roughly one 60 FPS frame.
+constexpr float kTestDeltaSeconds = 0.016f;
 
 template <typename View>
 std::size_t countIn(const View& view)
@@ -437,14 +465,14 @@ void testMovementSystem()
     SystemManager systems;
     systems.add<MovementSystem>();
 
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
 
     CHECK(entity.getComponent<Position>().value == Vec2(12.0f, 19.0f));
     CHECK(entity.getComponent<Velocity>().value == Vec2(2.0f, -1.0f));
 
     // Running again keeps moving: the system is stateless behaviour, not a
     // one-shot transform.
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
     CHECK(entity.getComponent<Position>().value == Vec2(14.0f, 18.0f));
 }
 
@@ -463,7 +491,7 @@ void testMovementSystemAcrossManyEntities()
 
     SystemManager systems;
     systems.add<MovementSystem>();
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
 
     CHECK(first.getComponent<Position>().value == Vec2(1.0f, 2.0f));
     CHECK(second.getComponent<Position>().value == Vec2(9.0f, 10.0f));
@@ -483,13 +511,13 @@ void testMultipleSystemsOnSameEntity()
     systems.add<MovementSystem>();
     systems.add<HealthDecaySystem>(2);
 
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
 
     // Both systems acted on the same entity, independently.
     CHECK(entity.getComponent<Position>().value == Vec2(3.0f, 4.0f));
     CHECK(entity.getComponent<Health>().value == 8);
 
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
     CHECK(entity.getComponent<Position>().value == Vec2(6.0f, 8.0f));
     CHECK(entity.getComponent<Health>().value == 6);
 }
@@ -507,7 +535,7 @@ void testSystemExecutionOrderIsDeterministic()
 
     CHECK(systems.systemCount() == 4);
 
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
 
     CHECK(log.size() == 4);
     if (log.size() == 4)
@@ -520,7 +548,7 @@ void testSystemExecutionOrderIsDeterministic()
 
     // Repeating gives exactly the same order.
     log.clear();
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
     CHECK(log.size() == 4);
     if (log.size() == 4)
     {
@@ -546,12 +574,12 @@ void testSystemQueryIsRepeatable()
     std::size_t visited = 0;
     SystemManager systems;
     systems.add<CountingSystem>(visited);
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
 
     CHECK(visited == 4);
 
     // Running again is repeatable: a fresh query each frame, same result.
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
     CHECK(visited == 8);
 }
 
@@ -565,7 +593,7 @@ void testSystemsDoNotOwnEntities()
     {
         SystemManager systems;
         systems.add<MovementSystem>();
-        systems.update(manager);
+        systems.update(manager, kTestDeltaSeconds);
         CHECK(entity.getComponent<Position>().value == Vec2(1.0f, 1.0f));
     }
 
@@ -579,7 +607,7 @@ void testSystemsDoNotOwnEntities()
     // And the world still works without any systems at all.
     SystemManager later;
     later.add<MovementSystem>();
-    later.update(manager);
+    later.update(manager, kTestDeltaSeconds);
     CHECK(entity.getComponent<Position>().value == Vec2(2.0f, 2.0f));
 }
 
@@ -607,7 +635,7 @@ void testQueryAndSystemsWithNoEntities()
     systems.add<HealthDecaySystem>(5);
 
     // Running against an empty world must be harmless.
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
     CHECK(manager.aliveEntityCount() == 0);
     CHECK(manager.query<Position, Velocity>().empty());
 }
@@ -652,10 +680,90 @@ void testQueryCombinedWithTagsAndCleanup()
 
     SystemManager systems;
     systems.add<MovementSystem>();
-    systems.update(manager);
+    systems.update(manager, kTestDeltaSeconds);
 
     CHECK(player.getComponent<Position>().value == Vec2(1.0f, 0.0f));
     CHECK(enemy.getComponent<Position>().value == Vec2(1.0f, 0.0f));
+}
+
+void testSystemsReceiveDeltaSeconds()
+{
+    EntityManager manager;
+    std::vector<float> deltas;
+
+    SystemManager systems;
+    systems.add<DeltaRecordingSystem>(deltas);
+
+    systems.update(manager, 0.016f);
+
+    // The system was handed exactly what the caller passed, unaltered.
+    CHECK(deltas.size() == 1);
+    if (deltas.size() == 1)
+    {
+        CHECK(deltas[0] == 0.016f);
+    }
+
+    deltas.clear();
+    systems.update(manager, 0.25f);
+    CHECK(deltas.size() == 1);
+    if (deltas.size() == 1)
+    {
+        CHECK(deltas[0] == 0.25f);
+    }
+}
+
+void testAllSystemsReceiveTheSameDelta()
+{
+    EntityManager manager;
+    std::vector<float> first;
+    std::vector<float> second;
+    std::vector<float> third;
+
+    SystemManager systems;
+    systems.add<DeltaRecordingSystem>(first);
+    systems.add<DeltaRecordingSystem>(second);
+    systems.add<DeltaRecordingSystem>(third);
+
+    systems.update(manager, 0.033f);
+
+    CHECK(first.size() == 1);
+    CHECK(second.size() == 1);
+    CHECK(third.size() == 1);
+
+    if (first.size() == 1 && second.size() == 1 && third.size() == 1)
+    {
+        // One frame, one delta, every system, unchanged.
+        CHECK(first[0] == 0.033f);
+        CHECK(second[0] == first[0]);
+        CHECK(third[0] == first[0]);
+    }
+}
+
+void testDeltaReachesSystemsInRegistrationOrder()
+{
+    EntityManager manager;
+    std::vector<float> deltas;
+    std::vector<std::string> order;
+
+    SystemManager systems;
+    systems.add<RecordingSystem>(order, "first");
+    systems.add<DeltaRecordingSystem>(deltas);
+    systems.add<RecordingSystem>(order, "third");
+
+    systems.update(manager, 0.05f);
+
+    // Adding the delta recorder between two loggers must not disturb the order.
+    CHECK(order.size() == 2);
+    if (order.size() == 2)
+    {
+        CHECK(order[0] == "first");
+        CHECK(order[1] == "third");
+    }
+    CHECK(deltas.size() == 1);
+    if (deltas.size() == 1)
+    {
+        CHECK(deltas[0] == 0.05f);
+    }
 }
 
 } // namespace
@@ -682,6 +790,9 @@ int main()
         {"systems with no entities", &testQueryAndSystemsWithNoEntities},
         {"query is recomputed each time", &testQueryIsRecomputedEachTime},
         {"query combined with tags and cleanup", &testQueryCombinedWithTagsAndCleanup},
+        {"systems receive deltaSeconds", &testSystemsReceiveDeltaSeconds},
+        {"all systems receive the same delta", &testAllSystemsReceiveTheSameDelta},
+        {"delta reaches systems in registration order", &testDeltaReachesSystemsInRegistrationOrder},
     };
 
     int failedGroups = 0;

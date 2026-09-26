@@ -109,10 +109,11 @@ writes behaviour into them.
 class MovementSystem final : public ecs::System
 {
 public:
-    void update(ecs::EntityManager& entities) override
+    void update(ecs::EntityManager& entities, float deltaSeconds) override
     {
         for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
         {
+            (void)deltaSeconds;
             position.value += velocity.value;
         }
     }
@@ -122,7 +123,7 @@ public:
 ```
 
 `System` itself is deliberately empty of data: a virtual destructor, a pure
-`update(EntityManager&)`, and a `name()` for diagnostics. There is no
+`update(EntityManager&, float deltaSeconds)`, and a `name()` for diagnostics. There is no
 "system entity", and a system is not a specialised Entity.
 
 Full detail is in sections 11 to 14.
@@ -386,10 +387,15 @@ class System
 {
 public:
     virtual ~System() = default;
-    virtual void update(EntityManager& entities) = 0;
+    virtual void update(EntityManager& entities, float deltaSeconds) = 0;
     [[nodiscard]] virtual const char* name() const = 0;
 };
 ```
+
+`deltaSeconds` is a parameter, not a global and not something a system looks up
+from a clock. Timing is a property of the frame, so it arrives with the frame.
+That is what lets a test drive a system with an exact delta instead of sleeping.
+See [runtime.md](runtime.md) for the time abstraction that produces it.
 
 The base class contains no data. There is no `SystemEntity`, and a system is not
 a kind of entity. A system is handed the manager, queries what it needs, and
@@ -427,7 +433,7 @@ SystemManager systems;
 systems.add<InputSystem>();
 systems.add<MovementSystem>();
 systems.add<PhysicsSystem>();
-systems.update(entities);
+systems.update(entities, deltaSeconds);
 ```
 
 - **Ownership is one-directional.** `SystemManager` → `System`. Entities always
@@ -488,9 +494,9 @@ Honest list of what is deliberately not here yet:
 - **No gameplay systems.** The `System` abstraction and `SystemManager` exist and
   are proven by test-only systems, but no rendering, physics, collision, input,
   animation, camera, audio or AI system has been written. Those are later phases.
-- **`update()` has no delta time.** A system is called as `update(EntityManager&)`,
-  so a test system advances state by one step per call. Real systems will need
-  `deltaSeconds`, and the signature will change when the first one does.
+- **No fixed timestep.** Systems receive real elapsed frame time, measured by
+  `engine::Time`, so the simulation is not deterministic across machines. A fixed
+  physics timestep is a later-phase decision; see [runtime.md](runtime.md).
 - **A const query is not a hard security boundary.** The query yields
   `const T&`, but a `const Entity&` taken from it can still reach a mutable
   component through `getComponent<T>()`, because Entity's constness protects

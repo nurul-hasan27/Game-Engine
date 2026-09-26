@@ -19,17 +19,26 @@ class EntityManager;
 /// class MovementSystem final : public System
 /// {
 /// public:
-///     void update(EntityManager& entities) override
+///     void update(EntityManager& entities, const float deltaSeconds) override
 ///     {
-///         for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
+///         for (auto&& [entity, transform] : entities.query<Transform>())
 ///         {
-///             position.value += velocity.value;
+///             transform.position += transform.velocity * deltaSeconds;
 ///         }
 ///     }
 ///
 ///     [[nodiscard]] const char* name() const override { return "MovementSystem"; }
 /// };
 /// ```
+///
+/// ### Delta time is passed in, never reached for
+///
+/// `deltaSeconds` is a parameter, not a global, not a singleton clock, and not
+/// something a system fetches from an `engine::Time` it happens to know about.
+/// Timing is a property of the frame, so it arrives with the frame. That keeps
+/// systems testable, because a test can hand them an exact delta instead of
+/// sleeping, and it keeps a system honest about depending only on what it was
+/// given. Systems that do not care about time simply ignore the parameter.
 class System
 {
 public:
@@ -37,12 +46,16 @@ public:
 
     /// Runs this system's behaviour for one frame.
     ///
+    /// @param entities The world to act on. Never owned by the system.
+    /// @param deltaSeconds Real seconds elapsed since the previous frame, in
+    ///        seconds, already clamped by engine::Time. Ignoring it is fine.
+    ///
     /// Implementations iterate the EntityManager with query<> and write to the
     /// component data they find. They must not create or destroy entities, and
     /// must not add or remove components: see "Structural mutation" in
     /// Query.hpp. A system that needs to do that should collect the request and
     /// apply it after its loop.
-    virtual void update(EntityManager& entities) = 0;
+    virtual void update(EntityManager& entities, float deltaSeconds) = 0;
 
     /// A short stable name, used for diagnostics and for reporting execution
     /// order. Not used to select or sort systems.

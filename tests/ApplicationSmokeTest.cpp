@@ -24,6 +24,24 @@ int main()
             std::cerr << "Smoke test failed: Application::run did not succeed\n";
             return EXIT_FAILURE;
         }
+
+        // Phase 5 integration: the application measures every frame it runs, so
+        // the timing abstraction is genuinely wired into the main loop rather
+        // than constructed and forgotten.
+        if (application.time().frameCount() < kFramesToRun)
+        {
+            std::cerr << "Smoke test failed: only " << application.time().frameCount()
+                      << " frame(s) were timed, expected at least " << kFramesToRun << '\n';
+            return EXIT_FAILURE;
+        }
+
+        // The runtime exposes the world and the systems as accessors, so main()
+        // and a future example can populate the engine without reaching inside.
+        if (application.entityManager().aliveEntityCount() != 0 || application.systemManager().systemCount() != 0)
+        {
+            std::cerr << "Smoke test failed: a fresh application should start with an empty world and no systems\n";
+            return EXIT_FAILURE;
+        }
     }
     catch (const std::exception& error)
     {

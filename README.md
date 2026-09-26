@@ -6,29 +6,46 @@ This is an **incremental** project. It is built one phase at a time, and each
 phase adds a single engine subsystem on top of a foundation that already builds
 and runs.
 
-## Current phase: 4 — ECS Systems + Component Queries
+## Current phase: 5 — Runtime Timing + Transform
 
-### Phases 1 to 3 (complete)
+### Phases 1 to 4 (complete)
 
 - **Phase 1 — Project Foundation:** CMake project, SFML window, main loop with a
   clean update/render split.
 - **Phase 2 — Math Foundation:** `engine::Vec2`, the engine's own 2D vector,
   described in detail below.
-- **Phase 3 — ECS Core:** `engine::ecs::Entity`, `ComponentStorage`,
-  `EntityManager` and `EntityView`.
+- **Phase 3 — ECS Core:** `Entity`, `ComponentStorage`, `EntityManager`,
+  `EntityView`.
+- **Phase 4 — ECS Systems + Component Queries:** `Query<A, B>()`, `System`,
+  `SystemManager`.
 
-### Phase 4 — ECS Systems + Component Queries (current)
+### Phase 5 — Runtime Timing + Transform (current)
 
-- `engine::ecs::Query`: `query<A>()`, `query<A, B>()`, `query<A, B, C>()`,
-  yielding `(entity, components...)` with no copies and no allocation.
-- `engine::ecs::System` and `engine::ecs::SystemManager`: behaviour, registration
-  and deterministic execution order.
-- **See [docs/ecs.md](docs/ecs.md)** for the full design, query lifetime, the
-  structural-mutation policy and current limitations.
+- `engine::Time`: per-frame delta in seconds, first frame zero, clamped to 0.1 s.
+- `System::update(EntityManager&, float deltaSeconds)` — timing is a parameter,
+  never a global or a singleton clock.
+- `engine::components::Transform`: the engine's first real component, pure data.
+- `Application` is now the composition root for window + time + world + systems.
+- **See [docs/runtime.md](docs/runtime.md)** for the frame lifecycle, the
+  delta-time contract, clamping, and the Transform component.
 
-Components remain pure data and entities remain bare identities; all behaviour
-lives in systems. No gameplay systems exist yet — rendering, physics, collision,
-input, animation, cameras, audio, particles and scenes are all later phases.
+Components remain pure data, entities remain bare identities, and all behaviour
+lives in systems. Still no gameplay systems: rendering, physics, collision, input,
+animation, cameras, audio, particles, scenes and asset management are all later
+phases.
+
+The runtime now looks like this:
+
+```text
+Application
+    ↓  time.tick()                    measures the frame
+    ↓  systemManager.update(world, dt)
+    ↓
+Systems  (behaviour)
+    ↓  query<Transform>()
+    ↓
+Components  (data)  →  Vec2
+```
 
 ## Requirements
 
@@ -118,13 +135,19 @@ cd build && ctest --output-on-failure
 | `math.vec2` | every `engine::Vec2` operation, including the zero-vector and division-by-zero contracts |
 | `ecs.core` | entity lifetime, id uniqueness, tags, component storage, error behaviour and deferred destruction |
 | `ecs.systems` | component queries, const-query safety, system execution order and ownership |
+| `runtime.timing_transform` | frame timing, delta clamping, the `Transform` component, and the full time→system→query→component chain |
 
 Phase 1 had no logic worth unit testing, so the meaningful check there was that
-the application builds, runs and shuts down cleanly. Phase 2 added `math.vec2`
-(18 groups), Phase 3 added `ecs.core` (26 groups) and Phase 4 added
-`ecs.systems` (19 groups). Each group is reported individually with a
+the application builds, runs and shuts down cleanly. Later phases added
+`math.vec2` (18 groups), `ecs.core` (26), `ecs.systems` (22) and
+`runtime.timing_transform` (22). Each group is reported individually with a
 `file:line` for every failing check. Tests use the plain-C++-executable style
 already in the project: no external test framework, no new dependencies.
+
+Timing tests never sleep. `Time::advance()` takes an explicit duration, so the
+clamping and accounting rules are verified deterministically on any machine; the
+one test that touches the real clock asserts only that it is wired up, using a
+generous tolerance.
 
 The `game` executable accepts an optional `--frames <count>` argument, used by
 the end-to-end test to stop the loop on its own instead of waiting for someone
@@ -218,6 +241,9 @@ Re-run CMake after changing one of them.
 │   └── engine.config.cmake.in  template for the generated engine config header
 ├── include/engine/             public engine headers
 │   ├── Application.hpp
+│   ├── Time.hpp               frame timing, delta in seconds
+│   ├── components/
+│   │   └── Transform.hpp      first real component: pure data
 │   ├── ecs/
 │   │   ├── ComponentStorage.hpp type-erased, owning component storage
 │   │   ├── Entity.hpp          identity, tag, liveness, components
@@ -232,7 +258,8 @@ Re-run CMake after changing one of them.
 ├── src/
 │   ├── main.cpp                entry point: parses arguments, owns Application
 │   └── engine/
-│       ├── Application.cpp     window ownership and the main loop
+│       ├── Application.cpp     window, timing, world and systems, in order
+│       ├── Time.cpp
 │       ├── ecs/
 │       │   ├── ComponentStorage.cpp
 │       │   ├── EntityManager.cpp
@@ -244,9 +271,11 @@ Re-run CMake after changing one of them.
 │   ├── ApplicationSmokeTest.cpp
 │   ├── Vec2Test.cpp
 │   ├── EcsTest.cpp
-│   └── EcsSystemsTest.cpp
+│   ├── EcsSystemsTest.cpp
+│   └── RuntimeTest.cpp
 ├── docs/
-│   └── ecs.md                  ECS design and lifetime rules
+│   ├── ecs.md                  ECS design and lifetime rules
+│   └── runtime.md              frame lifecycle, timing, Transform
 ├── assets/                     reserved for textures, fonts, sounds (later phases)
 ├── shaders/                    reserved for GLSL shaders (later phases)
 ├── levels/                     reserved for level data (later phases)
@@ -307,4 +336,13 @@ Re-run CMake after changing one of them.
   individually allocated. Structural changes (`addEntity`, `update`,
   `addComponent`, `removeComponent`) are documented as unsupported mid-iteration
   rather than enforced at runtime.
+- `engine::Time` is the only place `std::chrono` appears. Systems receive
+  `deltaSeconds` as a parameter, so nothing reaches for a global clock, and tests
+  drive timing with explicit durations instead of sleeping.
+- Delta is measured as real elapsed time and clamped to 0.1 s, so a debugger
+  pause or a stalled frame cannot fling entities across the screen. The frame
+  rate cap stays a presentation decision: gameplay never assumes `1 / targetFPS`.
+- `engine::components::Transform` has **no member functions**. The test suite
+  asserts at compile time that it is an aggregate, trivially copyable and
+  standard layout, so "components are data" is enforced rather than promised.
 # Game-Engine

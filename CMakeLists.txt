@@ -99,6 +99,7 @@ endif()
 # examples and the tests can each provide their own entry point.
 add_library(engine STATIC
             src/engine/Application.cpp
+            src/engine/Time.cpp
             src/engine/ecs/ComponentStorage.cpp
             src/engine/ecs/EntityManager.cpp
             src/engine/ecs/EntityView.cpp
@@ -158,4 +159,11 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(ecs_systems_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME ecs.systems COMMAND ecs_systems_test)
     set_tests_properties(ecs.systems PROPERTIES TIMEOUT 60)
+
+    # Runtime timing and the Transform component.
+    add_executable(runtime_test tests/RuntimeTest.cpp)
+    target_link_libraries(runtime_test PRIVATE engine)
+    target_compile_options(runtime_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME runtime.timing_transform COMMAND runtime_test)
+    set_tests_properties(runtime.timing_transform PROPERTIES TIMEOUT 60)
 endif()

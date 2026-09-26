@@ -1,5 +1,9 @@
 #pragma once
 
+#include "engine/Time.hpp"
+#include "engine/ecs/EntityManager.hpp"
+#include "engine/ecs/SystemManager.hpp"
+
 #include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/Window/Event.hpp>
 
@@ -9,16 +13,36 @@
 namespace engine
 {
 
-/// Owns the game window and drives the main loop: process events, update, render.
+/// Owns the window and drives the main loop, and is the composition root for
+/// the runtime.
 ///
-/// The window is an sf::RenderWindow, which is SFML's renderable window: it
-/// combines sf::Window (events, timing) with sf::RenderTarget (clear, draw,
-/// display). Later phases need the drawing half for sprites, text, vertex arrays
-/// and particles, so this is the type the engine is built around.
+/// ### What Application owns
 ///
-/// Phase 1 keeps this class deliberately minimal. The update/render split
-/// already exists so that later phases can slot in input, ECS, physics and
-/// scene systems without having to restructure the loop.
+/// | Member | Responsibility |
+/// | ------ | -------------- |
+/// | `sf::RenderWindow` | the window, its events, and presentation |
+/// | `Time` | measures how long each frame actually took |
+/// | `EntityManager` | the world: every entity and its components |
+/// | `SystemManager` | the behaviour, run in registration order |
+///
+/// Application is the only place these four are wired together. It does not
+/// implement any behaviour of its own: there is no physics, no rendering logic
+/// and no gameplay here, only ordering. The window is the one genuinely
+/// SFML-dependent member, which is what keeps SFML confined to this boundary.
+///
+/// ### The frame
+///
+/// ```text
+/// processEvents()                  -> window.isOpen() becomes false on close
+/// time.tick()                      -> measures this frame's real duration
+/// systemManager.update(world, dt)  -> behaviour writes component data
+/// entityManager.update()           -> deferred destruction cleanup
+/// render()                         -> draw
+/// ```
+///
+/// Systems run before cleanup on purpose. A system that asks for an entity to
+/// die only sets a flag, and the erase happens in `entityManager.update()`
+/// afterwards, so nothing is removed from underneath a running system.
 class Application
 {
 public:
@@ -40,12 +64,27 @@ public:
     ///        instead of waiting for a user to close the window.
     int run(std::optional<std::size_t> maxFrameCount = std::nullopt);
 
+    /// The world. Entities are added here by main(), by an example, or by a
+    /// future scene, never by a system.
+    [[nodiscard]] ecs::EntityManager& entityManager() noexcept { return m_entityManager; }
+
+    /// The behaviour. Systems are registered here and run in the order they
+    /// were added.
+    [[nodiscard]] ecs::SystemManager& systemManager() noexcept { return m_systemManager; }
+
+    /// Frame timing, mainly so a debug overlay could read it. Systems are handed
+    /// the delta as a parameter and should not need this.
+    [[nodiscard]] const Time& time() const noexcept { return m_time; }
+
 private:
     void processEvents();
     void update();
     void render();
 
     sf::RenderWindow m_window;
+    Time m_time;
+    ecs::EntityManager m_entityManager;
+    ecs::SystemManager m_systemManager;
     bool m_isRunning = true;
 };
 
