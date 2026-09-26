@@ -8,6 +8,11 @@ namespace engine::ecs
 class EntityManager;
 }
 
+namespace engine::input
+{
+class Input;
+}
+
 namespace engine::systems
 {
 
@@ -33,7 +38,10 @@ public:
     /// to `Application`, and a system must never own the thing it draws into.
     explicit RenderSystem(graphics::Renderer& renderer) noexcept : m_renderer{&renderer} {}
 
-    void update(engine::ecs::EntityManager& entities, float deltaSeconds) override;
+    /// Takes `input` only because every system shares one signature. Drawing
+    /// does not read the keyboard, and this is not a way for rendering to grow a
+    /// dependency on input later.
+    void update(engine::ecs::EntityManager& entities, input::Input& input, float deltaSeconds) override;
 
     [[nodiscard]] const char* name() const override { return "RenderSystem"; }
 

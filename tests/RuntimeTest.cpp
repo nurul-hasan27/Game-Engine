@@ -5,6 +5,7 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/System.hpp"
 #include "engine/ecs/SystemManager.hpp"
+#include "engine/input/Input.hpp"
 #include "engine/math/Vec2.hpp"
 
 #include <chrono>
@@ -38,8 +39,9 @@ using engine::ecs::SystemManager;
 class TransformMovementSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
+        (void)input; // time-driven, not input-driven
         for (auto&& [entity, transform] : entities.query<Transform>())
         {
             (void)entity;
@@ -55,8 +57,9 @@ public:
 class TransformSpinSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
+        (void)input; // time-driven, not input-driven
         for (auto&& [entity, transform] : entities.query<Transform>())
         {
             (void)entity;
@@ -76,9 +79,10 @@ public:
     {
     }
 
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
         (void)entities;
+        (void)input;
         (void)deltaSeconds;
         m_log->push_back(m_label);
     }
@@ -360,6 +364,7 @@ void testTransformUsesEngineVec2()
 void testTransformIsStoredOnEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
 
     Transform& transform = entity.addComponent<Transform>();
@@ -380,6 +385,7 @@ void testTransformIsStoredOnEntities()
 void testTransformsAreIndependentPerEntity()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& first = manager.addEntity("first");
     Entity& second = manager.addEntity("second");
 
@@ -402,6 +408,7 @@ void testTransformsAreIndependentPerEntity()
 void testTransformQuery()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& moving = manager.addEntity("moving");
     Entity& still = manager.addEntity("still");
     Entity& other = manager.addEntity("other");
@@ -435,6 +442,7 @@ void testTransformQuery()
 void testMovementSystemUsesDelta()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F});
 
@@ -442,11 +450,11 @@ void testMovementSystemUsesDelta()
     systems.add<TransformMovementSystem>();
 
     // One second of movement at 100,50 units per second.
-    systems.update(manager, 1.0F);
+    systems.update(manager, input, 1.0F);
     CHECK(entity.getComponent<Transform>().position == Vec2(100.0F, 50.0F));
 
     // Half a second moves half as far: the system is genuinely time-scaled.
-    systems.update(manager, 0.5F);
+    systems.update(manager, input, 0.5F);
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 150.0F);
     CHECK_NEAR(entity.getComponent<Transform>().position.y, 75.0F);
 }
@@ -454,13 +462,14 @@ void testMovementSystemUsesDelta()
 void testMovementSystemMatchesVec2Semantics()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     // 45 degrees, unit speed: one second of travel ends on the unit circle.
     entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{1.0F, 0.0F}.rotated(0.25F), Vec2{1.0F, 1.0F}, 0.0F});
 
     SystemManager systems;
     systems.add<TransformMovementSystem>();
-    systems.update(manager, 1.0F);
+    systems.update(manager, input, 1.0F);
 
     const Transform& transform = entity.getComponent<Transform>();
     CHECK_NEAR(transform.position.length(), 1.0F);
@@ -471,6 +480,7 @@ void testMovementSystemMatchesVec2Semantics()
 void testClampedDeltaProtectsMovement()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{100.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
 
@@ -479,7 +489,7 @@ void testClampedDeltaProtectsMovement()
 
     // A two second stall is clamped to 0.1 s, so the entity moves 10 units
     // instead of 200 and nothing is flung off screen.
-    systems.update(manager, Time::kMaxDeltaSeconds);
+    systems.update(manager, input, Time::kMaxDeltaSeconds);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(10.0F, 0.0F));
 }
@@ -488,6 +498,7 @@ void testRealTimeDrivesMovement()
 {
     // The full chain, with the clock driving it rather than a literal delta.
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{60.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
 
@@ -505,7 +516,7 @@ void testRealTimeDrivesMovement()
     time.advance(millis(20.0F));
     CHECK_NEAR(time.deltaSeconds(), 0.02F);
 
-    systems.update(manager, time.deltaSeconds());
+    systems.update(manager, input, time.deltaSeconds());
 
     // 60 units per second for 0.02 s is 1.2 units.
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 1.2F);
@@ -514,6 +525,7 @@ void testRealTimeDrivesMovement()
 void testMultipleSystemsAndOrderWithTiming()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     std::vector<std::string> order;
 
     Entity& entity = manager.addEntity("entity");
@@ -525,7 +537,7 @@ void testMultipleSystemsAndOrderWithTiming()
     systems.add<TransformSpinSystem>();
     systems.add<OrderRecorderSystem>(order, "B");
 
-    systems.update(manager, 0.5F);
+    systems.update(manager, input, 0.5F);
 
     CHECK(order.size() == 2);
     if (order.size() == 2)
@@ -543,13 +555,14 @@ void testMultipleSystemsAndOrderWithTiming()
 void testEntitiesWithoutTransformAreUntouched()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& plain = manager.addEntity("plain");
     plain.addComponent<MarkerComponent>();
     manager.addEntity("bare");
 
     SystemManager systems;
     systems.add<TransformMovementSystem>();
-    systems.update(manager, 1.0F);
+    systems.update(manager, input, 1.0F);
 
     CHECK(manager.query<Transform>().empty());
     CHECK(manager.aliveEntityCount() == 2);

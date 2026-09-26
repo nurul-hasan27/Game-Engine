@@ -23,14 +23,19 @@ Application
 One frame of `Application::run()` is:
 
 ```text
-  1. processEvents()                   window.isOpen() goes false on close
-  2. time.tick()                       measures this frame's real duration
-  3. systemManager.update(world, dt)   behaviour writes component data
-  4. entityManager.update()            deferred destruction cleanup
-  5. render()                          draw
+  1. input.beginFrame()                 clear pressed/released, keep held state
+  2. processEvents()                    window close; keyboard into Input
+  3. time.tick()                       measures this frame's real duration
+  4. systemManager.update(world, in, dt)  behaviour reads input, writes data
+  5. entityManager.update()            deferred destruction cleanup
+  6. render()                          draw
 ```
 
-Steps 3 and 4 are in that order deliberately. A system that decides an entity
+Step 1 precedes step 2 on purpose: clearing input transients before events are
+processed means a key seen this frame is still visible to systems later in the
+same frame. See [input.md](input.md) §5.
+
+Steps 4 and 5 are in that order deliberately. A system that decides an entity
 must die only sets a flag (see [ecs.md](ecs.md) §8), and the erase happens in
 step 4 once no system is iterating, so nothing is ever removed from underneath
 running behaviour.
@@ -121,7 +126,7 @@ it rather than re-spelling the magic number.
 ## 5. The system update signature
 
 ```cpp
-virtual void update(EntityManager& entities, float deltaSeconds) = 0;
+virtual void update(EntityManager& entities, input::Input& input, float deltaSeconds) = 0;
 ```
 
 Delta time is a **parameter**, not a global, not a singleton clock, and not
@@ -149,7 +154,7 @@ SystemManager systems;
 systems.add<InputSystem>();
 systems.add<MovementSystem>();
 systems.add<PhysicsSystem>();
-systems.update(entities, deltaSeconds);
+systems.update(entities, input, deltaSeconds);
 ```
 
 Registration order is therefore the execution order, and it is identical on every

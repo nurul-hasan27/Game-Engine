@@ -6,6 +6,7 @@
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/graphics/Renderer.hpp"
 #include "engine/systems/RenderSystem.hpp"
+#include "engine/input/Input.hpp"
 #include "engine/math/Vec2.hpp"
 
 // SFML appears here, and only here, because this file contains a real graphics
@@ -94,8 +95,9 @@ private:
 class DriftSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
+        (void)input;
         for (auto&& [entity, transform] : entities.query<engine::components::Transform>())
         {
             (void)entity;
@@ -191,6 +193,7 @@ void testRectangleAggregateConstruction()
 void testRectangleIsStoredOnEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
 
     entity.addComponent<Transform>();
@@ -295,6 +298,7 @@ void testRenderTransformMapsEverythingAtOnce()
 void testRenderSystemDrawsMatchingEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -302,7 +306,7 @@ void testRenderSystemDrawsMatchingEntities()
     entity.addComponent<Transform>(Transform{Vec2{100.0F, 100.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
     entity.addComponent<Rectangle>(Rectangle{Vec2{40.0F, 20.0F}, Color{1.0F, 0.0F, 0.0F, 1.0F}});
 
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -317,6 +321,7 @@ void testRenderSystemDrawsMatchingEntities()
 void testRenderSystemIgnoresEntitiesMissingComponents()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -331,7 +336,7 @@ void testRenderSystemIgnoresEntitiesMissingComponents()
     // Neither.
     manager.addEntity("bare");
 
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
 
     CHECK(renderer.draws().empty());
 }
@@ -339,6 +344,7 @@ void testRenderSystemIgnoresEntitiesMissingComponents()
 void testRenderSystemIgnoresDeadEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -352,7 +358,7 @@ void testRenderSystemIgnoresDeadEntities()
 
     manager.destroyEntity(doomed);
 
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
 
@@ -360,13 +366,14 @@ void testRenderSystemIgnoresDeadEntities()
     // The recording renderer accumulates, so reset it to count this frame only.
     manager.update();
     renderer.reset();
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
     CHECK(renderer.draws().size() == 1);
 }
 
 void testRenderSystemDrawsManyEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -378,7 +385,7 @@ void testRenderSystemDrawsManyEntities()
         entity.addComponent<Rectangle>();
     }
 
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
 
     CHECK(renderer.draws().size() == 16);
 }
@@ -386,6 +393,7 @@ void testRenderSystemDrawsManyEntities()
 void testRenderSystemMapsTransformIntoDrawCalls()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -393,7 +401,7 @@ void testRenderSystemMapsTransformIntoDrawCalls()
     entity.addComponent<Transform>(Transform{Vec2{50.0F, 60.0F}, Vec2{0.0F, 0.0F}, Vec2{2.0F, 3.0F}, kPi / 2.0F});
     entity.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
 
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -409,6 +417,7 @@ void testRenderSystemMapsTransformIntoDrawCalls()
 void testRenderSystemRunsAfterSimulationSystems()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
 
     engine::ecs::SystemManager systems;
@@ -420,8 +429,8 @@ void testRenderSystemRunsAfterSimulationSystems()
     entity.addComponent<Rectangle>();
 
     // One second of drift, then draw: the draw must see the moved position.
-    systems.update(manager, 1.0F);
-    renderSystem.update(manager, 0.0F);
+    systems.update(manager, input, 1.0F);
+    renderSystem.update(manager, input, 0.0F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -433,6 +442,7 @@ void testRenderSystemRunsAfterSimulationSystems()
 void testRenderSystemDoesNotOwnEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -441,20 +451,21 @@ void testRenderSystemDoesNotOwnEntities()
         Entity& entity = manager.addEntity("entity");
         entity.addComponent<Transform>();
         entity.addComponent<Rectangle>();
-        renderSystem.update(manager, 0.016F);
+        renderSystem.update(manager, input, 0.016F);
         CHECK(renderer.draws().size() == 1);
     }
 
     // Systems are gone; the world is untouched and still drawable.
     CHECK(manager.aliveEntityCount() == 1);
     CHECK(manager.query<Transform, Rectangle>().size() == 1);
-    renderSystem.update(manager, 0.016F);
+    renderSystem.update(manager, input, 0.016F);
     CHECK(renderer.draws().size() == 2);
 }
 
 void testRendererFrameProtocol()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     RenderSystem renderSystem{renderer};
 
@@ -466,7 +477,7 @@ void testRendererFrameProtocol()
     entity.addComponent<Transform>();
     entity.addComponent<Rectangle>();
 
-    renderSystem.update(manager, 0.0F);
+    renderSystem.update(manager, input, 0.0F);
     renderer.endFrame();
 
     CHECK(renderer.beginFrameCount() == 1);

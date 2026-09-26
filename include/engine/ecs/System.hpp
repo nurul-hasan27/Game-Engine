@@ -1,5 +1,13 @@
 #pragma once
 
+namespace engine
+{
+namespace input
+{
+class Input;
+}
+} // namespace engine
+
 namespace engine::ecs
 {
 
@@ -19,11 +27,11 @@ class EntityManager;
 /// class MovementSystem final : public System
 /// {
 /// public:
-///     void update(EntityManager& entities, const float deltaSeconds) override
+///     void update(EntityManager& entities, input::Input& input, float deltaSeconds) override
 ///     {
 ///         for (auto&& [entity, transform] : entities.query<Transform>())
 ///         {
-///             transform.position += transform.velocity * deltaSeconds;
+///             transform.position += directionFrom(input) * speed * deltaSeconds;
 ///         }
 ///     }
 ///
@@ -31,14 +39,20 @@ class EntityManager;
 /// };
 /// ```
 ///
-/// ### Delta time is passed in, never reached for
+/// ### Its dependencies are parameters
 ///
-/// `deltaSeconds` is a parameter, not a global, not a singleton clock, and not
-/// something a system fetches from an `engine::Time` it happens to know about.
-/// Timing is a property of the frame, so it arrives with the frame. That keeps
-/// systems testable, because a test can hand them an exact delta instead of
-/// sleeping, and it keeps a system honest about depending only on what it was
-/// given. Systems that do not care about time simply ignore the parameter.
+/// Everything a system is allowed to depend on arrives in the call: the world,
+/// the input state, and how long the frame took. None of it is a global, a
+/// singleton, or something the system fetches by reaching into `Application`.
+///
+/// That is what keeps the dependency direction honest. A system can never
+/// acquire input the way it would acquire a clock or a keyboard, so the only
+/// way to give it input is to hand it some, and the only way to test it is to
+/// hand it a fake.
+///
+/// Systems that do not care about input simply ignore the parameter. One uniform
+/// signature is worth more than a special case for systems that happen to be
+/// input driven.
 class System
 {
 public:
@@ -47,6 +61,7 @@ public:
     /// Runs this system's behaviour for one frame.
     ///
     /// @param entities The world to act on. Never owned by the system.
+    /// @param input Keyboard state for this frame. Never owned by the system.
     /// @param deltaSeconds Real seconds elapsed since the previous frame, in
     ///        seconds, already clamped by engine::Time. Ignoring it is fine.
     ///
@@ -55,7 +70,7 @@ public:
     /// must not add or remove components: see "Structural mutation" in
     /// Query.hpp. A system that needs to do that should collect the request and
     /// apply it after its loop.
-    virtual void update(EntityManager& entities, float deltaSeconds) = 0;
+    virtual void update(EntityManager& entities, input::Input& input, float deltaSeconds) = 0;
 
     /// A short stable name, used for diagnostics and for reporting execution
     /// order. Not used to select or sort systems.

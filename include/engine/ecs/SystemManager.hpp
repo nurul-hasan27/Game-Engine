@@ -55,11 +55,14 @@ public:
     /// Runs every registered system once, in registration order.
     ///
     /// @param entities The world to hand to each system. Owned by the caller.
+    /// @param input Keyboard state for this frame, handed to each system by
+    ///        reference. The same state object goes to every system, so they all
+    ///        agree on what the player is doing.
     /// @param deltaSeconds Seconds elapsed since the previous frame. Passed
     ///        unchanged to every system, so all of them see the same value for
     ///        the same frame. Measured by engine::Time; see System for why the
     ///        delta is a parameter rather than something systems look up.
-    void update(EntityManager& entities, float deltaSeconds);
+    void update(EntityManager& entities, input::Input& input, float deltaSeconds);
 
 private:
     // unique_ptr so that adding a system does not move the systems already

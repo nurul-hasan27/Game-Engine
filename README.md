@@ -6,9 +6,9 @@ This is an **incremental** project. It is built one phase at a time, and each
 phase adds a single engine subsystem on top of a foundation that already builds
 and runs.
 
-## Current phase: 6 — Rendering Foundation
+## Current phase: 7 — Input System
 
-### Phases 1 to 5 (complete)
+### Phases 1 to 6 (complete)
 
 - **Phase 1 — Project Foundation:** CMake project, SFML window, main loop with a
   clean update/render split.
@@ -17,37 +17,38 @@ and runs.
   `EntityView`.
 - **Phase 4 — ECS Systems + Component Queries:** `Query<A, B>()`, `System`,
   `SystemManager`.
-- **Phase 5 — Runtime Timing + Transform:** `Time`, `System::update(world, dt)`,
+- **Phase 5 — Runtime Timing + Transform:** `Time`, `deltaSeconds`,
   `components::Transform`.
+- **Phase 6 — Rendering Foundation:** `Renderer`, `SfmlRenderer`,
+  `components::Rectangle`, `systems::RenderSystem`.
 
-### Phase 6 — Rendering Foundation (current)
+### Phase 7 — Input System (current)
 
-- `graphics::Renderer`, an SFML-free interface; `graphics::SfmlRenderer`, the
-  only place SFML is included for rendering.
-- `components::Rectangle`, the first renderable component, and
-  `engine::Color` so components carry no SFML type.
-- `graphics::RenderTransform` and the pure `toRenderTransform` conversion.
-- `systems::RenderSystem`, which queries the ECS and submits draws.
-- **See [docs/rendering.md](docs/rendering.md)** for the coordinate contract,
-  the angle-conversion rule, the position convention, ownership and limitations.
+- `input::Input` and `input::Key`: SFML-free keyboard state, owned by
+  `Application`, handed to systems by reference.
+- `input::SfmlKeyMap`: the whole SFML→engine input boundary.
+- `systems::MovementSystem`: the reference system proving the whole chain.
+- `System::update(EntityManager&, Input&, float deltaSeconds)`.
+- **See [docs/input.md](docs/input.md)** for the key state model, the SFML
+  boundary, the frame ordering, and diagonal normalisation.
 
-The pipeline the phases have been building towards now runs end to end:
+The full chain the project has been building towards now runs interactively:
 
 ```text
-Entity + Transform + Rectangle
-    ↓  query<Transform, Rectangle>()
-RenderSystem          ← behaviour
-    ↓  toRenderTransform()  (radians → degrees, at the boundary)
-Renderer              ← interface, no SFML types
+physical key
+    ↓  sf::Event            (SFML owns the physical source)
+input::Input               (the engine owns the meaning)
+    ↓  isKeyDown / isKeyPressed / isKeyReleased
+MovementSystem             ← behaviour
+    ↓  query<Transform>
+components::Transform      ← data, moved by a system, not by itself
     ↓
-SFML window
-    ↓
-a visible rectangle
+RenderSystem → Renderer → visible, moving rectangle
 ```
 
-Still no gameplay beyond that: texture loading, asset management, animation,
-sprites, cameras, shaders, particles, physics, collision, input, audio and scenes
-are all later phases.
+No `Player` class: the player is an entity with a `Transform` and a `Rectangle`.
+Still no gameplay beyond that — mouse support, key bindings, text input,
+animation, cameras, physics, collision, audio and scenes are later phases.
 
 ## Requirements
 
@@ -138,14 +139,15 @@ cd build && ctest --output-on-failure
 | `ecs.core` | entity lifetime, id uniqueness, tags, component storage, error behaviour and deferred destruction |
 | `ecs.systems` | component queries, const-query safety, system execution order and ownership |
 | `render.foundation` | the transform-to-render mapping, `RenderSystem` filtering, and real pixel readback from a real window |
+| `input.keyboard_movement` | the key state machine, the SFML key adapter, and `MovementSystem` including diagonal normalisation |
 
 Phase 1 had no logic worth unit testing, so the meaningful check there was that
 the application builds, runs and shuts down cleanly. Later phases added
 `math.vec2` (18 groups), `ecs.core` (26), `ecs.systems` (22),
-`runtime.timing_transform` (22) and `render.foundation` (24). Each group is
-reported individually with a `file:line` for every failing check. Tests use the
-plain-C++-executable style already in the project: no external test framework, no
-new dependencies.
+`runtime.timing_transform` (22), `render.foundation` (24) and
+`input.keyboard_movement` (38). Each group is reported individually with a
+`file:line` for every failing check. Tests use the plain-C++-executable style
+already in the project: no external test framework, no new dependencies.
 
 Timing tests never sleep. `Time::advance()` takes an explicit duration, so the
 clamping and accounting rules are verified deterministically on any machine; the
@@ -267,15 +269,19 @@ Re-run CMake after changing one of them.
 │   │   ├── RenderTransform.hpp Transform -> render space, SFML free
 │   │   ├── Renderer.hpp        graphics interface, no SFML types
 │   │   └── SfmlRenderer.hpp    forward declares sf::RenderWindow only
+│   ├── input/
+│   │   ├── Input.hpp           key state: down / pressed / released, SFML free
+│   │   └── SfmlKeyMap.hpp      the SFML -> engine input boundary
 │   ├── math/
 │   │   └── Vec2.hpp            2D vector, independent of SFML
 │   ├── systems/
+│   │   ├── MovementSystem.hpp  reference system: input -> Transform
 │   │   └── RenderSystem.hpp    draws Transform + Rectangle entities
 │   └── EngineConfig.hpp        (generated into build/, not in the source tree)
 ├── src/
 │   ├── main.cpp                entry point: parses arguments, owns Application
 │   └── engine/
-│       ├── Application.cpp     window, timing, world, systems, render pass
+│       ├── Application.cpp     window, input, timing, world, render pass
 │       ├── Time.cpp
 │       ├── ecs/
 │       │   ├── ComponentStorage.cpp
@@ -284,9 +290,12 @@ Re-run CMake after changing one of them.
 │       │   └── SystemManager.cpp
 │       ├── graphics/
 │       │   └── SfmlRenderer.cpp the one file that includes SFML for rendering
+│       ├── input/
+│       │   └── SfmlKeyMap.cpp   the one file that includes SFML for input
 │       ├── math/
 │       │   └── Vec2.cpp        operations needing sqrt, atan2, sin, cos
 │       └── systems/
+│           ├── MovementSystem.cpp
 │           └── RenderSystem.cpp
 ├── tests/
 │   ├── ApplicationSmokeTest.cpp
@@ -294,9 +303,11 @@ Re-run CMake after changing one of them.
 │   ├── EcsTest.cpp
 │   ├── EcsSystemsTest.cpp
 │   ├── RuntimeTest.cpp
-│   └── RenderTest.cpp
+│   ├── RenderTest.cpp
+│   └── InputTest.cpp
 ├── docs/
 │   ├── ecs.md                  ECS design and lifetime rules
+│   ├── input.md                input architecture and key state
 │   ├── rendering.md            render architecture and coordinate contract
 │   └── runtime.md              frame lifecycle, timing, Transform
 ├── assets/                     reserved for textures, fonts, sounds (later phases)
@@ -384,4 +395,16 @@ Re-run CMake after changing one of them.
   pass has to be bracketed by `beginFrame`/`endFrame` and run after simulation.
   It is still a plain `System`. The reasoning is in
   [docs/rendering.md](docs/rendering.md) §4.
+- `input::Input` is a plain owned value, not a singleton. `Application` owns one
+  and hands it to systems by reference, so there is no `system → Application →
+  Input` path and no global keyboard.
+- `isKeyDown` is level state and survives the frame boundary; `isKeyPressed` and
+  `isKeyReleased` are edge state and are true for exactly one frame.
+  `input.beginFrame()` clears only the edges, and runs **before** event
+  processing so a press seen this frame is never discarded before systems read it.
+- OS key repeat is swallowed: `processKeyDown` on an already-held key is a no-op,
+  so `isKeyPressed` stays true only for a real physical transition.
+- `systems::MovementSystem` normalises the input direction, so `W`+`D` moves at the
+  same speed as `W` alone, and multiplies by `speed * deltaSeconds` so a faster
+  machine does not move faster. It leaves `Transform::velocity` untouched.
 # Game-Engine

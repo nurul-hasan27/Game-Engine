@@ -109,11 +109,13 @@ writes behaviour into them.
 class MovementSystem final : public ecs::System
 {
 public:
-    void update(ecs::EntityManager& entities, float deltaSeconds) override
+    void update(ecs::EntityManager& entities, input::Input& input, float deltaSeconds) override
     {
+        (void)input;
+        (void)deltaSeconds;
         for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
         {
-            (void)deltaSeconds;
+            (void)entity;
             position.value += velocity.value;
         }
     }
@@ -387,7 +389,7 @@ class System
 {
 public:
     virtual ~System() = default;
-    virtual void update(EntityManager& entities, float deltaSeconds) = 0;
+    virtual void update(EntityManager& entities, input::Input& input, float deltaSeconds) = 0;
     [[nodiscard]] virtual const char* name() const = 0;
 };
 ```
@@ -433,7 +435,7 @@ SystemManager systems;
 systems.add<InputSystem>();
 systems.add<MovementSystem>();
 systems.add<PhysicsSystem>();
-systems.update(entities, deltaSeconds);
+systems.update(entities, input, deltaSeconds);
 ```
 
 - **Ownership is one-directional.** `SystemManager` → `System`. Entities always

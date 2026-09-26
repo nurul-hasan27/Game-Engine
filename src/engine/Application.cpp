@@ -1,5 +1,6 @@
 #include "engine/Application.hpp"
 #include "engine/EngineConfig.hpp"
+#include "engine/input/SfmlKeyMap.hpp"
 
 #include <cstdlib>
 
@@ -24,7 +25,8 @@ constexpr Color kWindowBackground = toColor(config::kBackgroundColorRed, config:
 
 Application::Application()
     : m_window(sf::VideoMode{config::kWindowWidth, config::kWindowHeight}, config::kWindowTitle), m_time{},
-      m_entityManager{}, m_systemManager{}, m_renderer{m_window}, m_renderSystem{m_renderer}, m_isRunning{true}
+      m_input{}, m_entityManager{}, m_systemManager{}, m_renderer{m_window}, m_renderSystem{m_renderer},
+      m_isRunning{true}
 {
     m_window.setFramerateLimit(config::kFramerateLimit);
 }
@@ -35,6 +37,11 @@ int Application::run(const std::optional<std::size_t> maxFrameCount)
 
     while (m_isRunning)
     {
+        // Clear only the frame-local input transients, and do it before events
+        // are processed. Held keys survive; a press seen during this frame's
+        // processEvents() is still visible to systems further down the frame.
+        m_input.beginFrame();
+
         processEvents();
 
         if (!m_isRunning)
@@ -64,12 +71,18 @@ void Application::processEvents()
         switch (event.type)
         {
             case sf::Event::Closed:
+                // Application lifecycle, and only Application. A window close is
+                // never turned into a keyboard event, and keyboard Escape is
+                // never turned into a window close: Input merely reports it, and
+                // deciding what Escape means is a policy the game makes.
                 m_isRunning = false;
                 break;
 
             default:
-                // Every other event is ignored in Phase 1. Input handling
-                // arrives with the input system in a later phase.
+                // The adapter recognises keyboard presses and releases and
+                // ignores everything else, so the filter lives in one place
+                // rather than in the case labels.
+                input::applyKeyboardEvent(event, m_input);
                 break;
         }
     }
@@ -82,8 +95,9 @@ void Application::update()
     // correctness must not depend on it.
     m_time.tick();
 
-    // Behaviour: every system gets the same delta for this frame.
-    m_systemManager.update(m_entityManager, m_time.deltaSeconds());
+    // Behaviour: every system gets the same input state and the same delta for
+    // this frame, and none of them can reach either another way.
+    m_systemManager.update(m_entityManager, m_input, m_time.deltaSeconds());
 
     // Deferred destruction cleanup, after systems have run, so an entity a
     // system flagged this frame is erased only once nothing is iterating.
@@ -97,7 +111,7 @@ void Application::render()
     // itself; it only sequences the pass.
     m_renderer.beginFrame();
     m_renderer.clear(kWindowBackground);
-    m_renderSystem.update(m_entityManager, 0.0F);
+    m_renderSystem.update(m_entityManager, m_input, 0.0F);
     m_renderer.endFrame();
 }
 

@@ -4,6 +4,7 @@
 #include "engine/ecs/EntityManager.hpp"
 #include "engine/ecs/SystemManager.hpp"
 #include "engine/graphics/SfmlRenderer.hpp"
+#include "engine/input/Input.hpp"
 #include "engine/systems/RenderSystem.hpp"
 
 #include <SFML/Graphics/RenderWindow.hpp>
@@ -24,6 +25,7 @@ namespace engine
 /// | ------ | -------------- |
 /// | `sf::RenderWindow` | the window, its events, and presentation |
 /// | `Time` | measures how long each frame actually took |
+/// | `input::Input` | keyboard state for the current frame |
 /// | `EntityManager` | the world: every entity and its components |
 /// | `SystemManager` | the simulation systems, run in registration order |
 /// | `SfmlRenderer` | the graphics boundary; references the window |
@@ -50,19 +52,25 @@ namespace engine
 /// ### The frame
 ///
 /// ```text
-/// processEvents()                  -> window.isOpen() becomes false on close
-/// time.tick()                      -> measures this frame's real duration
-/// systemManager.update(world, dt)  -> simulation systems write component data
-/// entityManager.update()           -> deferred destruction cleanup
-/// renderer.beginFrame()            -> RENDER: start the frame
-/// renderer.clear(background)       -> RENDER: configured background colour
-/// renderSystem.update(world, 0)    -> RENDER: submit draws
-/// renderer.endFrame()              -> RENDER: present
+/// input.beginFrame()                 clear pressed/released, keep held state
+/// processEvents()                    window close, and keyboard into Input
+/// time.tick()                        measures this frame's real duration
+/// systemManager.update(world, in, dt) simulation systems read input, write data
+/// entityManager.update()             deferred destruction cleanup
+/// renderer.beginFrame()              RENDER: start the frame
+/// renderer.clear(background)         RENDER: configured background colour
+/// renderSystem.update(world, in, 0)  RENDER: submit draws
+/// renderer.endFrame()                RENDER: present
 /// ```
 ///
 /// The event, update, render, display high-level order from Phase 1 is intact.
 /// Systems run before cleanup, so an entity a system flagged this frame is
 /// erased only once nothing is iterating.
+///
+/// `input.beginFrame()` runs **before** `processEvents()` on purpose. It clears
+/// only the frame-local transients, so clearing can never discard an event that
+/// arrived this frame: a key pressed during `processEvents()` is still readable
+/// by every system later in the same frame. Held state survives the clear.
 ///
 /// `RenderSystem` is deliberately **not** registered in the `SystemManager`. It
 /// is an ordinary `System` with the same interface and lifetime rules, but the
@@ -108,6 +116,10 @@ public:
     /// handed an `engine::graphics::Renderer&` instead of reaching for this.
     [[nodiscard]] graphics::Renderer& renderer() noexcept { return m_renderer; }
 
+    /// Keyboard state for the current frame, mainly for tools. Systems are
+    /// handed the same object by reference and should not reach for this.
+    [[nodiscard]] const input::Input& input() const noexcept { return m_input; }
+
 private:
     void processEvents();
     void update();
@@ -118,6 +130,7 @@ private:
     // Destruction is the reverse, so neither borrower outlives what it points at.
     sf::RenderWindow m_window;
     Time m_time;
+    input::Input m_input;
     ecs::EntityManager m_entityManager;
     ecs::SystemManager m_systemManager;
     graphics::SfmlRenderer m_renderer;

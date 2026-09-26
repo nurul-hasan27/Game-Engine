@@ -105,7 +105,9 @@ add_library(engine STATIC
             src/engine/ecs/EntityView.cpp
             src/engine/ecs/SystemManager.cpp
             src/engine/graphics/SfmlRenderer.cpp
+            src/engine/input/SfmlKeyMap.cpp
             src/engine/math/Vec2.cpp
+            src/engine/systems/MovementSystem.cpp
             src/engine/systems/RenderSystem.cpp)
 
 target_include_directories(engine PUBLIC
@@ -176,4 +178,11 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(render_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME render.foundation COMMAND render_test)
     set_tests_properties(render.foundation PROPERTIES TIMEOUT 60)
+
+    # Input: the key state machine, the SFML key adapter, and MovementSystem.
+    add_executable(input_test tests/InputTest.cpp)
+    target_link_libraries(input_test PRIVATE engine)
+    target_compile_options(input_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME input.keyboard_movement COMMAND input_test)
+    set_tests_properties(input.keyboard_movement PROPERTIES TIMEOUT 60)
 endif()

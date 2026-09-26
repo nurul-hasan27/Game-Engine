@@ -2,6 +2,7 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/System.hpp"
 #include "engine/ecs/SystemManager.hpp"
+#include "engine/input/Input.hpp"
 #include "engine/math/Vec2.hpp"
 
 #include <cstddef>
@@ -52,8 +53,9 @@ struct Label
 class MovementSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
+        (void)input;
         (void)deltaSeconds; // this system advances by a fixed step, not by time
         for (auto&& [entity, position, velocity] : entities.query<Position, Velocity>())
         {
@@ -71,8 +73,9 @@ class HealthDecaySystem final : public engine::ecs::System
 public:
     explicit HealthDecaySystem(int amount) : m_amount{amount} {}
 
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
+        (void)input;
         (void)deltaSeconds; // deliberate: proves a system may ignore time
         for (auto&& [entity, health] : entities.query<Health>())
         {
@@ -94,9 +97,10 @@ class RecordingSystem final : public engine::ecs::System
 public:
     RecordingSystem(std::vector<std::string>& log, std::string label) : m_log{&log}, m_label{std::move(label)} {}
 
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
         (void)entities;
+        (void)input;
         (void)deltaSeconds;
         m_log->push_back(m_label);
     }
@@ -114,8 +118,9 @@ class CountingSystem final : public engine::ecs::System
 public:
     explicit CountingSystem(std::size_t& count) : m_count{&count} {}
 
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
+        (void)input;
         (void)deltaSeconds;
         for ([[maybe_unused]] auto&& entry : entities.query<Position, Velocity>())
         {
@@ -136,9 +141,10 @@ class DeltaRecordingSystem final : public engine::ecs::System
 public:
     explicit DeltaRecordingSystem(std::vector<float>& deltas) : m_deltas{&deltas} {}
 
-    void update(engine::ecs::EntityManager& entities, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
     {
         (void)entities;
+        (void)input;
         m_deltas->push_back(deltaSeconds);
     }
 
@@ -227,6 +233,7 @@ static_assert(std::is_same_v<decltype(std::declval<EntityManager&>().query<Posit
 void testSingleComponentQuery()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& first = manager.addEntity("first");
     Entity& second = manager.addEntity("second");
     Entity& without = manager.addEntity("third");
@@ -251,6 +258,7 @@ void testSingleComponentQuery()
 void testMultiComponentQuery()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("first");
 
     entity.addComponent<Position>(Position{Vec2{10.0f, 20.0f}});
@@ -271,6 +279,7 @@ void testMultiComponentQuery()
 void testThreeComponentQuery()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("first");
 
     entity.addComponent<Position>(Position{Vec2{1.0f, 1.0f}});
@@ -294,6 +303,7 @@ void testThreeComponentQuery()
 void testQueryExcludesMissingComponents()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& onlyPosition = manager.addEntity("onlyPosition");
     Entity& onlyVelocity = manager.addEntity("onlyVelocity");
     Entity& both = manager.addEntity("both");
@@ -324,6 +334,7 @@ void testQueryExcludesMissingComponents()
 void testQueryExcludesDeadEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& alive = manager.addEntity("alive");
     Entity& doomed = manager.addEntity("doomed");
 
@@ -353,6 +364,7 @@ void testQueryExcludesDeadEntities()
 void testQueryEdgeCases()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
 
     // Zero entities at all.
     CHECK(manager.query<Position>().empty());
@@ -379,6 +391,7 @@ void testQueryEdgeCases()
 void testQueryVisitsEachEntityOnce()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     for (int i = 0; i < 5; ++i)
     {
         Entity& entity = manager.addEntity("entity");
@@ -404,6 +417,7 @@ void testQueryVisitsEachEntityOnce()
 void testQueryDoesNotCopyComponents()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Position>(Position{Vec2{1.0f, 2.0f}});
 
@@ -427,6 +441,7 @@ void testQueryDoesNotCopyComponents()
 void testConstQueryDoesNotAllowMutation()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Position>(Position{Vec2{1.0f, 2.0f}});
     entity.addComponent<Velocity>(Velocity{Vec2{5.0f, 5.0f}});
@@ -456,6 +471,7 @@ void testConstQueryDoesNotAllowMutation()
 void testMovementSystem()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
 
     // The exact worked example from the design: (10, 20) plus (2, -1).
@@ -465,20 +481,21 @@ void testMovementSystem()
     SystemManager systems;
     systems.add<MovementSystem>();
 
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
 
     CHECK(entity.getComponent<Position>().value == Vec2(12.0f, 19.0f));
     CHECK(entity.getComponent<Velocity>().value == Vec2(2.0f, -1.0f));
 
     // Running again keeps moving: the system is stateless behaviour, not a
     // one-shot transform.
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
     CHECK(entity.getComponent<Position>().value == Vec2(14.0f, 18.0f));
 }
 
 void testMovementSystemAcrossManyEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& first = manager.addEntity("first");
     Entity& second = manager.addEntity("second");
     Entity& staticOnly = manager.addEntity("static");
@@ -491,7 +508,7 @@ void testMovementSystemAcrossManyEntities()
 
     SystemManager systems;
     systems.add<MovementSystem>();
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
 
     CHECK(first.getComponent<Position>().value == Vec2(1.0f, 2.0f));
     CHECK(second.getComponent<Position>().value == Vec2(9.0f, 10.0f));
@@ -502,6 +519,7 @@ void testMovementSystemAcrossManyEntities()
 void testMultipleSystemsOnSameEntity()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Position>(Position{Vec2{0.0f, 0.0f}});
     entity.addComponent<Velocity>(Velocity{Vec2{3.0f, 4.0f}});
@@ -511,13 +529,13 @@ void testMultipleSystemsOnSameEntity()
     systems.add<MovementSystem>();
     systems.add<HealthDecaySystem>(2);
 
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
 
     // Both systems acted on the same entity, independently.
     CHECK(entity.getComponent<Position>().value == Vec2(3.0f, 4.0f));
     CHECK(entity.getComponent<Health>().value == 8);
 
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
     CHECK(entity.getComponent<Position>().value == Vec2(6.0f, 8.0f));
     CHECK(entity.getComponent<Health>().value == 6);
 }
@@ -525,6 +543,7 @@ void testMultipleSystemsOnSameEntity()
 void testSystemExecutionOrderIsDeterministic()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     std::vector<std::string> log;
 
     SystemManager systems;
@@ -535,7 +554,7 @@ void testSystemExecutionOrderIsDeterministic()
 
     CHECK(systems.systemCount() == 4);
 
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
 
     CHECK(log.size() == 4);
     if (log.size() == 4)
@@ -548,7 +567,7 @@ void testSystemExecutionOrderIsDeterministic()
 
     // Repeating gives exactly the same order.
     log.clear();
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
     CHECK(log.size() == 4);
     if (log.size() == 4)
     {
@@ -564,6 +583,7 @@ void testSystemExecutionOrderIsDeterministic()
 void testSystemQueryIsRepeatable()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     for (int i = 0; i < 4; ++i)
     {
         Entity& entity = manager.addEntity("entity");
@@ -574,18 +594,19 @@ void testSystemQueryIsRepeatable()
     std::size_t visited = 0;
     SystemManager systems;
     systems.add<CountingSystem>(visited);
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
 
     CHECK(visited == 4);
 
     // Running again is repeatable: a fresh query each frame, same result.
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
     CHECK(visited == 8);
 }
 
 void testSystemsDoNotOwnEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Position>(Position{Vec2{0.0f, 0.0f}});
     entity.addComponent<Velocity>(Velocity{Vec2{1.0f, 1.0f}});
@@ -593,7 +614,7 @@ void testSystemsDoNotOwnEntities()
     {
         SystemManager systems;
         systems.add<MovementSystem>();
-        systems.update(manager, kTestDeltaSeconds);
+        systems.update(manager, input, kTestDeltaSeconds);
         CHECK(entity.getComponent<Position>().value == Vec2(1.0f, 1.0f));
     }
 
@@ -607,7 +628,7 @@ void testSystemsDoNotOwnEntities()
     // And the world still works without any systems at all.
     SystemManager later;
     later.add<MovementSystem>();
-    later.update(manager, kTestDeltaSeconds);
+    later.update(manager, input, kTestDeltaSeconds);
     CHECK(entity.getComponent<Position>().value == Vec2(2.0f, 2.0f));
 }
 
@@ -630,12 +651,13 @@ void testAddSystemReferenceStaysValid()
 void testQueryAndSystemsWithNoEntities()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     SystemManager systems;
     systems.add<MovementSystem>();
     systems.add<HealthDecaySystem>(5);
 
     // Running against an empty world must be harmless.
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
     CHECK(manager.aliveEntityCount() == 0);
     CHECK(manager.query<Position, Velocity>().empty());
 }
@@ -643,6 +665,7 @@ void testQueryAndSystemsWithNoEntities()
 void testQueryIsRecomputedEachTime()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     CHECK(manager.query<Position>().empty());
 
     // A query is a view, not a snapshot, so it reflects later changes.
@@ -661,6 +684,7 @@ void testQueryIsRecomputedEachTime()
 void testQueryCombinedWithTagsAndCleanup()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     Entity& player = manager.addEntity("player");
     Entity& enemy = manager.addEntity("enemy");
     Entity& doomed = manager.addEntity("enemy");
@@ -680,7 +704,7 @@ void testQueryCombinedWithTagsAndCleanup()
 
     SystemManager systems;
     systems.add<MovementSystem>();
-    systems.update(manager, kTestDeltaSeconds);
+    systems.update(manager, input, kTestDeltaSeconds);
 
     CHECK(player.getComponent<Position>().value == Vec2(1.0f, 0.0f));
     CHECK(enemy.getComponent<Position>().value == Vec2(1.0f, 0.0f));
@@ -689,12 +713,13 @@ void testQueryCombinedWithTagsAndCleanup()
 void testSystemsReceiveDeltaSeconds()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     std::vector<float> deltas;
 
     SystemManager systems;
     systems.add<DeltaRecordingSystem>(deltas);
 
-    systems.update(manager, 0.016f);
+    systems.update(manager, input, 0.016f);
 
     // The system was handed exactly what the caller passed, unaltered.
     CHECK(deltas.size() == 1);
@@ -704,7 +729,7 @@ void testSystemsReceiveDeltaSeconds()
     }
 
     deltas.clear();
-    systems.update(manager, 0.25f);
+    systems.update(manager, input, 0.25f);
     CHECK(deltas.size() == 1);
     if (deltas.size() == 1)
     {
@@ -715,6 +740,7 @@ void testSystemsReceiveDeltaSeconds()
 void testAllSystemsReceiveTheSameDelta()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     std::vector<float> first;
     std::vector<float> second;
     std::vector<float> third;
@@ -724,7 +750,7 @@ void testAllSystemsReceiveTheSameDelta()
     systems.add<DeltaRecordingSystem>(second);
     systems.add<DeltaRecordingSystem>(third);
 
-    systems.update(manager, 0.033f);
+    systems.update(manager, input, 0.033f);
 
     CHECK(first.size() == 1);
     CHECK(second.size() == 1);
@@ -742,6 +768,7 @@ void testAllSystemsReceiveTheSameDelta()
 void testDeltaReachesSystemsInRegistrationOrder()
 {
     EntityManager manager;
+    [[maybe_unused]] engine::input::Input input;
     std::vector<float> deltas;
     std::vector<std::string> order;
 
@@ -750,7 +777,7 @@ void testDeltaReachesSystemsInRegistrationOrder()
     systems.add<DeltaRecordingSystem>(deltas);
     systems.add<RecordingSystem>(order, "third");
 
-    systems.update(manager, 0.05f);
+    systems.update(manager, input, 0.05f);
 
     // Adding the delta recorder between two loggers must not disturb the order.
     CHECK(order.size() == 2);
