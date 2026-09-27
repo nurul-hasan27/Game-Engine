@@ -6,9 +6,9 @@ This is an **incremental** project. It is built one phase at a time, and each
 phase adds a single engine subsystem on top of a foundation that already builds
 and runs.
 
-## Current phase: 7 — Input System
+## Current phase: 8 — Physics + Collision
 
-### Phases 1 to 6 (complete)
+### Phases 1 to 7 (complete)
 
 - **Phase 1 — Project Foundation:** CMake project, SFML window, main loop with a
   clean update/render split.
@@ -21,16 +21,22 @@ and runs.
   `components::Transform`.
 - **Phase 6 — Rendering Foundation:** `Renderer`, `SfmlRenderer`,
   `components::Rectangle`, `systems::RenderSystem`.
+- **Phase 7 — Input System:** `input::Input`, `input::Key`, `input::SfmlKeyMap`,
+  `systems::MovementSystem`, and the `update(world, input, dt)` signature.
 
-### Phase 7 — Input System (current)
+### Phase 8 — Physics + Collision (current)
 
-- `input::Input` and `input::Key`: SFML-free keyboard state, owned by
-  `Application`, handed to systems by reference.
-- `input::SfmlKeyMap`: the whole SFML→engine input boundary.
-- `systems::MovementSystem`: the reference system proving the whole chain.
-- `System::update(EntityManager&, Input&, float deltaSeconds)`.
-- **See [docs/input.md](docs/input.md)** for the key state model, the SFML
-  boundary, the frame ordering, and diagonal normalisation.
+- `components::Collider`: the collision box, pure data, separate from
+  `Rectangle` so collider size and draw size can differ.
+- `components::Body` and `physics::BodyType`: `Dynamic` and `Static`.
+- `physics::Aabb`: centre-based AABB, overlap test, penetration axis, minimum
+  translation vector. Entirely SFML-free.
+- `systems::PhysicsSystem`: integrate velocity, detect pairs, resolve position,
+  resolve velocity.
+- `MovementSystem` now sets **velocity** and physics owns position, so exactly
+  one system moves a body. Observable behaviour is unchanged.
+- **See [docs/physics.md](docs/physics.md)** for the AABB definition, the
+  touching-edge rule, pair iteration, resolution, and every current limitation.
 
 The full chain the project has been building towards now runs interactively:
 
@@ -39,16 +45,30 @@ physical key
     ↓  sf::Event            (SFML owns the physical source)
 input::Input               (the engine owns the meaning)
     ↓  isKeyDown / isKeyPressed / isKeyReleased
-MovementSystem             ← behaviour
+MovementSystem             ← input becomes velocity
     ↓  query<Transform>
-components::Transform      ← data, moved by a system, not by itself
+components::Transform      ← velocity is data, written by a system
     ↓
-RenderSystem → Renderer → visible, moving rectangle
+PhysicsSystem              ← velocity becomes position, and collisions resolve
+    ↓  query<Transform, Collider, Body>
+components::Transform      ← position is data, corrected by a system
+    ↓
+RenderSystem → Renderer → a player that stops at walls
 ```
 
-No `Player` class: the player is an entity with a `Transform` and a `Rectangle`.
-Still no gameplay beyond that — mouse support, key bindings, text input,
-animation, cameras, physics, collision, audio and scenes are later phases.
+No `Player` class: the player is an entity with a `Transform`, a `Rectangle`, a
+`Collider` and a `Body`. Still no gameplay beyond that — mouse support, key
+bindings, text input, animation, cameras, rotation, gravity, audio and scenes
+are later phases.
+
+This phase is deliberately small and deliberately naive:
+
+- AABB only, and only axis aligned. `Transform::angle` is ignored by physics.
+- Discrete detection. A fast body can tunnel through a thin collider, and that
+  is expected, not a bug to tune away.
+- The broad phase is intentionally naive at this scale: O(N²), no spatial
+  partitioning.
+- No collision filtering. Every collider collides with every other collider.
 
 ## Requirements
 
@@ -120,7 +140,10 @@ Valid values are `Debug`, `Release`, `RelWithDebInfo` and `MinSizeRel`.
 ./build/game
 ```
 
-The window opens and stays open until you close it.
+The window opens and stays open until you close it. The shipped demo is a small
+collision arena: a yellow player you drive with `WASD` or the arrow keys, inside a
+walled room with two static obstacles. Walk into anything and you stop against it;
+walk diagonally into a wall and you slide along it.
 
 With a multi-config generator (for example `Ninja Multi-Config`) the executable
 lands in a per-configuration folder, such as `./build/Debug/game`.
@@ -140,14 +163,16 @@ cd build && ctest --output-on-failure
 | `ecs.systems` | component queries, const-query safety, system execution order and ownership |
 | `render.foundation` | the transform-to-render mapping, `RenderSystem` filtering, and real pixel readback from a real window |
 | `input.keyboard_movement` | the key state machine, the SFML key adapter, and `MovementSystem` including diagonal normalisation |
+| `physics.collision` | AABB construction and overlap, the touching-edge rule, penetration axis, static/dynamic resolution, velocity resolution, and the input→movement→physics chain |
 
 Phase 1 had no logic worth unit testing, so the meaningful check there was that
 the application builds, runs and shuts down cleanly. Later phases added
 `math.vec2` (18 groups), `ecs.core` (26), `ecs.systems` (22),
-`runtime.timing_transform` (22), `render.foundation` (24) and
-`input.keyboard_movement` (38). Each group is reported individually with a
-`file:line` for every failing check. Tests use the plain-C++-executable style
-already in the project: no external test framework, no new dependencies.
+`runtime.timing_transform` (22), `render.foundation` (24),
+`input.keyboard_movement` (40) and `physics.collision` (35). Each group is
+reported individually with a `file:line` for every failing check. Tests use the
+plain-C++-executable style already in the project: no external test framework, no
+new dependencies.
 
 Timing tests never sleep. `Time::advance()` takes an explicit duration, so the
 clamping and accounting rules are verified deterministically on any machine; the
@@ -255,6 +280,8 @@ Re-run CMake after changing one of them.
 │   ├── Color.hpp               engine colour, channels in [0, 1]
 │   ├── Time.hpp                frame timing, delta in seconds
 │   ├── components/
+│   │   ├── Body.hpp            dynamic or static: physical state, pure data
+│   │   ├── Collider.hpp        collision box size, separate from Rectangle
 │   │   ├── Rectangle.hpp       first renderable component: pure data
 │   │   └── Transform.hpp       first real component: pure data
 │   ├── ecs/
@@ -274,8 +301,11 @@ Re-run CMake after changing one of them.
 │   │   └── SfmlKeyMap.hpp      the SFML -> engine input boundary
 │   ├── math/
 │   │   └── Vec2.hpp            2D vector, independent of SFML
+│   ├── physics/
+│   │   └── Aabb.hpp            AABB maths, overlap, MTV, SFML free
 │   ├── systems/
-│   │   ├── MovementSystem.hpp  reference system: input -> Transform
+│   │   ├── MovementSystem.hpp  reference system: input -> velocity
+│   │   ├── PhysicsSystem.hpp   velocity -> position, and collisions
 │   │   └── RenderSystem.hpp    draws Transform + Rectangle entities
 │   └── EngineConfig.hpp        (generated into build/, not in the source tree)
 ├── src/
@@ -296,6 +326,7 @@ Re-run CMake after changing one of them.
 │       │   └── Vec2.cpp        operations needing sqrt, atan2, sin, cos
 │       └── systems/
 │           ├── MovementSystem.cpp
+│           ├── PhysicsSystem.cpp
 │           └── RenderSystem.cpp
 ├── tests/
 │   ├── ApplicationSmokeTest.cpp
@@ -304,10 +335,12 @@ Re-run CMake after changing one of them.
 │   ├── EcsSystemsTest.cpp
 │   ├── RuntimeTest.cpp
 │   ├── RenderTest.cpp
-│   └── InputTest.cpp
+│   ├── InputTest.cpp
+│   └── PhysicsTest.cpp
 ├── docs/
 │   ├── ecs.md                  ECS design and lifetime rules
 │   ├── input.md                input architecture and key state
+│   ├── physics.md              collision architecture, AABB, resolution
 │   ├── rendering.md            render architecture and coordinate contract
 │   └── runtime.md              frame lifecycle, timing, Transform
 ├── assets/                     reserved for textures, fonts, sounds (later phases)
@@ -323,6 +356,9 @@ Re-run CMake after changing one of them.
   supply their own entry point. `game` is the executable.
 - `Application` owns the window by value. `sf::RenderWindow` closes itself in
   its destructor, so shutdown is handled by RAII rather than explicit cleanup.
+- The demo world is built in `main.cpp`, not in `Application`. `Application` is
+  the loop and the composition root; the arena, the player and the wall layout are
+  the game's content, and the engine stays unaware they exist.
 - `update()` and `render()` are separate from the start, even though Phase 1 has
   nothing to put in them. That boundary is where later phases plug in input,
   ECS systems, physics and animation without reshaping the loop.
@@ -405,6 +441,42 @@ Re-run CMake after changing one of them.
 - OS key repeat is swallowed: `processKeyDown` on an already-held key is a no-op,
   so `isKeyPressed` stays true only for a real physical transition.
 - `systems::MovementSystem` normalises the input direction, so `W`+`D` moves at the
-  same speed as `W` alone, and multiplies by `speed * deltaSeconds` so a faster
-  machine does not move faster. It leaves `Transform::velocity` untouched.
+  same speed as `W` alone. As of Phase 8 it **assigns** `Transform::velocity` and
+  leaves position to physics, so exactly one system moves a body; see
+  [docs/input.md](docs/input.md) §8.
+- `physics::Aabb` is stored as centre plus half extents, matching the
+  `Transform.position`-is-the-centre convention already set by the renderer, so
+  no AABB anywhere is built from a top-left corner and nothing converts between
+  the two forms. `min()` and `max()` are derived rather than stored.
+- **Touching edges do not collide.** The overlap test is strict
+  (`overlap > 0` on both axes). That is what lets a body rest exactly on a
+  surface without the resolver fighting it every frame. An exact penetration tie
+  resolves on the vertical axis: arbitrary, but fixed, which is what determinism
+  needs.
+- `components::Collider` and `components::Rectangle` are separate components on
+  purpose, and neither contains the other. A player sprite is routinely much
+  larger than its collider, and a collider that had to be a `Rectangle` could not
+  express that.
+- The pair loop uses **two independent iterators** over one query, the inner
+  starting just after the outer. That gives `i < j` structurally, so no body is
+  compared with itself and every pair is tested exactly once, without collecting
+  entities into a vector or allocating per frame.
+- Resolution is **positional**, not impulse based: overlapping pairs are pushed
+  apart along the axis of least penetration, taken in full by a dynamic body
+  facing a static one and split evenly between two dynamic ones. Two static bodies
+  are left alone, because nothing can push them and pretending otherwise would
+  make a wall slide around.
+- Velocity resolution zeroes only the component directed **into** the surface,
+  inferred from the correction direction. That single rule gives both required
+  behaviours: a body running diagonally into a wall keeps sliding along it, and a
+  body already moving away is not frozen merely because the boxes overlap.
+- A static body's velocity is forced to zero every step, so a wall cannot be moved
+  by a system that mistakenly gives it one, and `MovementSystem` does not need to
+  know that walls exist.
+- The broad phase is **intentionally naive** at this scale: O(N²), no spatial
+  grid, quadtree or sweep-and-prune. Those are the right answers at thousands of
+  bodies and the wrong thing to add before there is a measured problem.
+- Phase 8 uses **discrete** collision detection. A fast body can tunnel through a
+  thin collider in one step, which is a property of the approach rather than a
+  tuning problem, and a test pins the behaviour down rather than papering over it.
 # Game-Engine

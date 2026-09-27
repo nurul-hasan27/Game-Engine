@@ -2,8 +2,8 @@
 
 This document covers keyboard input: the engine-level abstraction, the SFML
 boundary, the key state model, and `MovementSystem`. For the ECS see
-[ecs.md](ecs.md), for the frame clock [runtime.md](runtime.md), and for drawing
-[rendering.md](rendering.md).
+[ecs.md](ecs.md), for the frame clock [runtime.md](runtime.md), for drawing
+[rendering.md](rendering.md), and for collision [physics.md](physics.md).
 
 ---
 
@@ -24,7 +24,9 @@ input::Input  (down / pressed / released)
         ↓
 System::update(world, input, deltaSeconds)
         ↓
-MovementSystem → components::Transform
+MovementSystem → components::Transform::velocity
+        ↓
+PhysicsSystem  → components::Transform::position
         ↓
 RenderSystem → Renderer → pixels
 ```
@@ -225,38 +227,70 @@ RenderSystem.
 | `A` or `Left` | left |
 | `D` or `Right` | right |
 
-The movement equation is:
+### This system sets velocity; physics moves the body
+
+**This changed in Phase 8.** Until then the system moved the body itself:
 
 ```cpp
-position += direction * speed * deltaSeconds;
+position += direction * speed * deltaSeconds;   // Phase 7
 ```
 
-with `speed` defaulting to `kDefaultSpeed`, 100 pixels per second. It is a real
-constant, never derived from a frame rate: a faster machine must not move faster,
-and the test `speed is independent of frame count` delivers one second of
-holding as a single 1.0 s frame in one world and as a hundred 0.01 s frames in
-another, then asserts both travelled exactly 100 pixels.
+It now sets velocity and leaves position alone:
+
+```cpp
+velocity = direction * speed;                    // Phase 8
+```
+
+`PhysicsSystem` integrates that velocity, so the body still moves. The
+observable behaviour is unchanged, and the observable difference is nil: setting
+`velocity = direction * speed` and then integrating `position += velocity *
+deltaSeconds` lands the body in exactly the same place, because integration is
+linear. Every Phase 7 movement test still passes, now driving the real
+`MovementSystem` → `PhysicsSystem` pair rather than `MovementSystem` alone.
+
+The reason for the change is that the old form cannot coexist with a physics
+system. Two systems each adding to `position` would each move the body, and the
+results would compound: a body would travel at double speed, and a body
+integrated by physics while movement also nudged it would be corrected by the
+resolver and nudged again. One system owns position, and that one is physics.
+
+Two details follow from velocity being the output:
+
+- Velocity is **assigned**, not accumulated, and is zero when no key is held.
+  Releasing the keys therefore stops the body instead of leaving it gliding at
+  the last frame's speed. The test `movement clears velocity when nothing held`
+  pins this.
+- Because it is assigned, `MovementSystem` **overwrites** any velocity another
+  system already set. The test `movement overwrites existing velocity` pins a
+  velocity of `(7, 9)` and asserts it is replaced rather than compounded.
+  Composing several sources of motion, such as input plus a knockback impulse, is
+  a later concern and needs a different model than "one system owns the field".
+
+`deltaSeconds` is still accepted, for the uniform `System` interface, and is
+deliberately unused. Velocity is per second and does not depend on the frame
+length.
+
+`PhysicsSystem` must therefore be registered **after** `MovementSystem`. See
+[physics.md](physics.md) §8.
 
 ### What it deliberately does not do
 
-- **No acceleration.** A held key moves at full speed on the first frame. No
-  ramp-up, no inertia, no friction.
-- **Velocity is not written.** `Transform::velocity` is left exactly as it was,
-  because position is derived directly from the input direction. Consuming
-  `velocity` as "last frame's direction" would quietly redefine a field other
-  systems may read. The test `movement leaves velocity alone` pins a non-direction
-  velocity and asserts it is untouched.
-- **No physics.** No gravity, no bounds, no collision, no ground.
+- **No acceleration.** A held key produces full speed immediately. No ramp-up, no
+  inertia, no friction.
+- **No physics of its own.** It has never applied gravity, and it does not
+  collide. `PhysicsSystem` does both; see [physics.md](physics.md).
 - **No `Player` class.** A player is an entity holding a `Transform` and a
   `Rectangle`, and being moved is something a system does to it. A `Player` type
   would put behaviour back next to the data, which is the thing the ECS exists to
   avoid.
 
-Note that the system moves *every* entity with a `Transform`, not just a player.
-That is correct ECS behaviour: a system acts on a component, and it has no way to
-know which entity is "the player". A game that wants only some entities to be
-player-controlled needs a marker component or a system scoped to a tag, which is
-a later-phase concern.
+Note that the system sets velocity on *every* entity with a `Transform`, not just
+a player. That is correct ECS behaviour: a system acts on a component, and it has
+no way to know which entity is "the player". It also does not need to: a static
+wall carries a `Body`, and `PhysicsSystem` forces a static body's velocity to zero
+every step, so a wall is unaffected by the player pressing keys. A game that wants
+only some entities to be player-controlled needs a marker component or a system
+scoped to a tag, which is a later-phase concern.
 
 ---
 
@@ -300,6 +334,10 @@ single-key directions travel exactly the same distance.
   as a unit.
 - **No dead zone, filtering or hysteresis** on the digital state. These matter
   for analogue sticks, not for keys.
+- **Velocity is assigned, not composed.** `MovementSystem` overwrites
+  `Transform::velocity` rather than adding to it, so a second source of motion
+  such as a knockback impulse cannot be expressed alongside input. That needs a
+  model in which several systems contribute to one velocity; see §8.
 - **No escape bound to closing the window.** `Input` reports `Key::Escape` and
   nothing more, and `Application` still closes only on the window close button.
   That preserves Phase 1 behaviour. Binding Escape to quit is a one-line policy

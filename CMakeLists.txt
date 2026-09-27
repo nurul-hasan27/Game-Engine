@@ -108,6 +108,7 @@ add_library(engine STATIC
             src/engine/input/SfmlKeyMap.cpp
             src/engine/math/Vec2.cpp
             src/engine/systems/MovementSystem.cpp
+            src/engine/systems/PhysicsSystem.cpp
             src/engine/systems/RenderSystem.cpp)
 
 target_include_directories(engine PUBLIC
@@ -185,4 +186,11 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(input_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME input.keyboard_movement COMMAND input_test)
     set_tests_properties(input.keyboard_movement PROPERTIES TIMEOUT 60)
+
+    # Physics: AABB maths, collision detection and resolution.
+    add_executable(physics_test tests/PhysicsTest.cpp)
+    target_link_libraries(physics_test PRIVATE engine)
+    target_compile_options(physics_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME physics.collision COMMAND physics_test)
+    set_tests_properties(physics.collision PROPERTIES TIMEOUT 60)
 endif()

@@ -97,6 +97,24 @@ Components must be **default-constructible or constructible from the arguments
 you pass to `addComponent<T>()`**, and their type must be usable as a
 `std::type_index`, which in practice means any ordinary class type.
 
+### The components that exist
+
+| Component | Phase | Holds |
+| --------- | ----- | ----- |
+| `Transform` | 5 | position, velocity, scale, angle |
+| `Rectangle` | 6 | draw size and fill colour |
+| `Collider` | 8 | collision box size |
+| `Body` | 8 | `physics::BodyType`, dynamic or static |
+
+`Transform` and `Rectangle` are documented in [runtime.md](runtime.md) and
+[rendering.md](rendering.md); `Collider` and `Body` in [physics.md](physics.md).
+
+All four are pure data, all four are aggregates, and all four hold only engine
+types. `Collider` and `Rectangle` are deliberately **separate** components: one is
+the shape used for collision and the other is the shape used for drawing, and a
+game routinely wants them to differ. Neither contains the other. See
+[physics.md](physics.md) §2.
+
 ---
 
 ## 4. What a System is
@@ -363,6 +381,29 @@ snapshot: an entity that gains a component starts matching on the next query.
 - `query<T, T>()` is rejected at compile time, because it would yield two
   references to the same component. Write `query<T>()` instead.
 
+### Two independent iterators over one query
+
+A query is a view, so it can be iterated twice at once. `PhysicsSystem` uses this
+to visit every unordered pair exactly once without collecting anything:
+
+```cpp
+auto outer = entities.query<Transform, Collider, Body>().begin();
+const auto last = entities.query<Transform, Collider, Body>().end();
+
+for (; outer != last; ++outer)
+{
+    auto inner = outer;
+    ++inner;
+    for (; inner != last; ++inner) { /* pair (*outer, *inner), so i < j */ }
+}
+```
+
+Two independent iterators rather than one iterator plus an index, because the query
+owns no indexable storage: it is a filtered range over the manager's entities.
+`i < j` follows from where the inner iterator starts, which is what guarantees no
+body is compared with itself and no pair is tested twice. See
+[physics.md](physics.md) §6.
+
 ### Const queries
 
 A `const EntityManager` only ever produces read-only queries, and a read-only
@@ -446,6 +487,13 @@ systems.update(entities, input, deltaSeconds);
   no dependency graph. Systems run where they were added, so the order is the
   same on every run and every platform. "Input, then movement, then physics" is
   expressed by adding them in that order.
+
+  That order is load bearing, and the engine relies on it. `MovementSystem` writes
+  `Transform::velocity` and `PhysicsSystem` reads it, so registering physics first
+  would integrate the previous frame's velocity and lag input by a frame. The
+  mechanism to express this is simply the order of the `add<S>()` calls; there is
+  deliberately no way to declare a dependency, because a system that needed one
+  would be signalling that it belongs somewhere other than the simulation loop.
 - **References stay valid.** `add<S>()` returns a reference that survives further
   registrations, because each system is separately owned rather than stored by
   value in a `vector<System>`.

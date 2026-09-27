@@ -6,6 +6,7 @@
 #include "engine/input/SfmlKeyMap.hpp"
 #include "engine/math/Vec2.hpp"
 #include "engine/systems/MovementSystem.hpp"
+#include "engine/systems/PhysicsSystem.hpp"
 
 // SFML appears only for the adapter tests at the bottom of this file. Every test
 // above the "SFML adapter" heading drives Input through processKeyDown/Up and
@@ -32,6 +33,7 @@ using engine::ecs::EntityManager;
 using engine::input::Input;
 using engine::input::Key;
 using engine::systems::MovementSystem;
+using engine::systems::PhysicsSystem;
 
 // ---------------------------------------------------------------------------
 // Minimal harness, matching the style already used by the other test files.
@@ -411,12 +413,31 @@ Entity& makeMover(EntityManager& manager, const Vec2& position = Vec2{0.0F, 0.0F
     return entity;
 }
 
+/// One frame of the real chain: MovementSystem turns input into velocity, then
+/// PhysicsSystem integrates that velocity into position.
+///
+/// Phase 7's tests drove MovementSystem alone and asserted where the body ended
+/// up, because MovementSystem moved position itself. Since Phase 8 it does not:
+/// physics owns integration. So these tests now drive the same pair the
+/// Application does, and every assertion below is unchanged from Phase 7. That
+/// is the point of the refactor, and these are the tests that prove it: the
+/// observable result of holding a key is the same as it always was.
+void stepFrame(EntityManager& manager, MovementSystem& movement, Input& input, const float deltaSeconds)
+{
+    PhysicsSystem physics;
+    movement.update(manager, input, deltaSeconds);
+    physics.update(manager, input, deltaSeconds);
+}
+
 void testNoInputMeansNoMovement()
 {
     EntityManager manager;
     Input input;
     engine::ecs::SystemManager systems;
+    // Registration order is the update order, and physics has to come after
+    // movement or it would integrate the previous frame's velocity.
     systems.add<MovementSystem>(100.0F);
+    systems.add<PhysicsSystem>();
 
     Entity& entity = makeMover(manager);
 
@@ -435,14 +456,14 @@ void testMoveUp()
     input.processKeyDown(Key::W);
 
     // One second at 100 px/s is 100 pixels up, which is -y on screen.
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(0.0F, -100.0F));
 
     // The arrow key does the same thing.
     input.reset();
     input.processKeyDown(Key::Up);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
     CHECK(entity.getComponent<Transform>().position == Vec2(0.0F, -200.0F));
 }
 
@@ -455,7 +476,7 @@ void testMoveDown()
     Entity& entity = makeMover(manager);
     input.processKeyDown(Key::S);
 
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(0.0F, 100.0F));
 }
@@ -469,7 +490,7 @@ void testMoveLeft()
     Entity& entity = makeMover(manager);
     input.processKeyDown(Key::A);
 
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(-100.0F, 0.0F));
 }
@@ -483,7 +504,7 @@ void testMoveRight()
     Entity& entity = makeMover(manager);
     input.processKeyDown(Key::D);
 
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(100.0F, 0.0F));
 }
@@ -498,7 +519,7 @@ void testOppositeKeysCancel()
     input.processKeyDown(Key::D);
     input.processKeyDown(Key::A);
 
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(0.0F, 0.0F));
 }
@@ -513,7 +534,7 @@ void testDiagonalMovementIsNormalized()
     input.processKeyDown(Key::W);
     input.processKeyDown(Key::D);
 
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     const Vec2 position = entity.getComponent<Transform>().position;
 
@@ -548,7 +569,7 @@ void testHorizontalAndVerticalSpeedsMatch()
         if (key.y < 0.0F) keys_pressed.processKeyDown(Key::W);
         if (key.y > 0.0F) keys_pressed.processKeyDown(Key::S);
 
-        movement.update(manager, keys_pressed, 1.0F);
+        stepFrame(manager, movement, keys_pressed, 1.0F);
 
         const Vec2 travelled = entity.getComponent<Transform>().position - start;
         CHECK_NEAR(travelled.length(), 100.0F);
@@ -565,15 +586,15 @@ void testMovementIsDeltaTimeBased()
     input.processKeyDown(Key::D);
 
     // A quarter second moves a quarter as far.
-    movement.update(manager, input, 0.25F);
+    stepFrame(manager, movement, input, 0.25F);
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 25.0F);
 
     // Four quarter-second frames: total elapsed is exactly one second, so the
     // total distance is exactly one second of speed. Sum of deltas is what
     // matters, not the number of frames.
-    movement.update(manager, input, 0.25F);
-    movement.update(manager, input, 0.25F);
-    movement.update(manager, input, 0.25F);
+    stepFrame(manager, movement, input, 0.25F);
+    stepFrame(manager, movement, input, 0.25F);
+    stepFrame(manager, movement, input, 0.25F);
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 100.0F);
 }
 
@@ -586,7 +607,7 @@ void testSpeedIsIndependentOfFrameCount()
     // One second of holding, delivered as a single 1.0 s frame.
     EntityManager oneFrame;
     Entity& coarse = makeMover(oneFrame);
-    movement.update(oneFrame, input, 1.0F);
+    stepFrame(oneFrame, movement, input, 1.0F);
 
     // The same second, delivered as a hundred 0.01 s frames, in a separate
     // world so the two cases cannot contaminate each other.
@@ -594,7 +615,7 @@ void testSpeedIsIndependentOfFrameCount()
     Entity& fine = makeMover(manyFrames);
     for (int frame = 0; frame < 100; ++frame)
     {
-        movement.update(manyFrames, input, 0.01F);
+        stepFrame(manyFrames, movement, input, 0.01F);
     }
 
     // Same elapsed time, same distance. This is the property that makes the
@@ -614,29 +635,74 @@ void testCustomSpeed()
 
     Entity& entity = makeMover(manager);
     input.processKeyDown(Key::D);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 250.0F);
 }
 
-void testMovementLeavesVelocityAlone()
+void testMovementSetsVelocity()
 {
+    // As of Phase 8 this system's output is velocity, not position. Phase 7
+    // asserted the exact opposite, and deliberately so: the old code moved
+    // position itself and refused to touch a velocity field other systems might
+    // be using. Now that physics owns integration, the two would double-move the
+    // body, so velocity has to be the output.
+    EntityManager manager;
+    Input input;
+    MovementSystem movement{100.0F};
+
+    Entity& entity = makeMover(manager);
+    input.processKeyDown(Key::D);
+    // MovementSystem alone, with no physics in the loop, so this really is
+    // measuring its output and not the whole chain's.
+    movement.update(manager, input, 1.0F);
+
+    const Transform& transform = entity.getComponent<Transform>();
+    // Velocity is per second, and does not depend on the frame length.
+    CHECK_NEAR(transform.velocity.x, 100.0F);
+    CHECK_NEAR(transform.velocity.y, 0.0F);
+    // Position is physics's job, not this system's.
+    CHECK(transform.position == Vec2(0.0F, 0.0F));
+}
+
+void testMovementOverwritesExistingVelocity()
+{
+    // Velocity is assigned, not accumulated, so a stale or externally set value
+    // cannot be smuggled in and compounded with the player's input.
     EntityManager manager;
     Input input;
     MovementSystem movement{100.0F};
 
     Entity& entity = manager.addEntity("mover");
-    // A velocity that is deliberately not a direction: the movement system must
-    // not consume it or rewrite it.
     entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{7.0F, 9.0F}, Vec2{1.0F, 1.0F}, 0.0F});
 
     input.processKeyDown(Key::D);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     const Transform& transform = entity.getComponent<Transform>();
-    CHECK(transform.position == Vec2(100.0F, 0.0F));
-    // Velocity is untouched: this system derives motion from input, not from it.
-    CHECK(transform.velocity == Vec2(7.0F, 9.0F));
+    CHECK_NEAR(transform.velocity.x, 100.0F);
+    CHECK_NEAR(transform.velocity.y, 0.0F);
+}
+
+void testMovementClearsVelocityWhenNothingHeld()
+{
+    // Releasing the keys must stop the body, not leave it gliding. A velocity
+    // left behind from the last held frame would carry the entity forever.
+    EntityManager manager;
+    Input input;
+    MovementSystem movement{100.0F};
+
+    Entity& entity = makeMover(manager);
+
+    input.processKeyDown(Key::D);
+    stepFrame(manager, movement, input, 1.0F);
+    CHECK_NEAR(entity.getComponent<Transform>().velocity.x, 100.0F);
+
+    input.processKeyUp(Key::D);
+    nextFrame(input);
+    stepFrame(manager, movement, input, 1.0F);
+
+    CHECK(entity.getComponent<Transform>().velocity == Vec2(0.0F, 0.0F));
 }
 
 void testMultipleEntitiesAllMove()
@@ -650,7 +716,7 @@ void testMultipleEntitiesAllMove()
     Entity& third = makeMover(manager, Vec2{20.0F, 20.0F});
 
     input.processKeyDown(Key::D);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(first.getComponent<Transform>().position == Vec2(100.0F, 0.0F));
     CHECK(second.getComponent<Transform>().position == Vec2(110.0F, 10.0F));
@@ -668,7 +734,7 @@ void testEntitiesWithoutTransformAreUntouched()
     manager.addEntity("bare");
 
     input.processKeyDown(Key::D);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(manager.aliveEntityCount() == 2);
     CHECK(manager.query<Transform>().empty());
@@ -686,7 +752,7 @@ void testDeadEntitiesAreNotMoved()
     manager.destroyEntity(doomed);
 
     input.processKeyDown(Key::D);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     CHECK(alive.getComponent<Transform>().position == Vec2(100.0F, 0.0F));
     // The dead one kept its position, because the query skipped it.
@@ -702,13 +768,13 @@ void testReleasingKeysStopsMovement()
     Entity& entity = makeMover(manager);
 
     input.processKeyDown(Key::D);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
     CHECK(entity.getComponent<Transform>().position == Vec2(100.0F, 0.0F));
 
     // Release, then next frame.
     input.processKeyUp(Key::D);
     nextFrame(input);
-    movement.update(manager, input, 1.0F);
+    stepFrame(manager, movement, input, 1.0F);
 
     // Unchanged: no keys held, so no movement.
     CHECK(entity.getComponent<Transform>().position == Vec2(100.0F, 0.0F));
@@ -780,6 +846,7 @@ void testSystemsShareTheSameInputObject()
 
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(100.0F);
+    systems.add<PhysicsSystem>();
 
     makeMover(manager);
 
@@ -799,6 +866,7 @@ void testMovementAndOtherSystemsCompose()
 
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(100.0F);
+    systems.add<PhysicsSystem>();
 
     Entity& entity = makeMover(manager);
 
@@ -849,7 +917,9 @@ int main()
         {"movement is delta time based", &testMovementIsDeltaTimeBased},
         {"speed is independent of frame count", &testSpeedIsIndependentOfFrameCount},
         {"custom speed", &testCustomSpeed},
-        {"movement leaves velocity alone", &testMovementLeavesVelocityAlone},
+        {"movement sets velocity", &testMovementSetsVelocity},
+        {"movement overwrites existing velocity", &testMovementOverwritesExistingVelocity},
+        {"movement clears velocity when nothing held", &testMovementClearsVelocityWhenNothingHeld},
         {"multiple entities all move", &testMultipleEntitiesAllMove},
         {"entities without transform are untouched", &testEntitiesWithoutTransformAreUntouched},
         {"dead entities are not moved", &testDeadEntitiesAreNotMoved},

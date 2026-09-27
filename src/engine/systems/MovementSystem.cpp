@@ -50,21 +50,21 @@ namespace
 void MovementSystem::update(engine::ecs::EntityManager& entities, input::Input& input,
                             const float deltaSeconds)
 {
+    // Physics owns integration, so this system's job ends at setting a
+    // velocity. deltaSeconds is accepted for the uniform signature and is
+    // deliberately not used: velocity is per second, and applying it to
+    // position here as well would move the body twice.
+    static_cast<void>(deltaSeconds);
+
     const Vec2 direction = directionFrom(input);
-
-    if (direction == Vec2{0.0F, 0.0F})
-    {
-        return; // nothing held, nothing to do
-    }
-
-    // Real elapsed frame time, not a fixed step. Half a frame of holding moves
-    // half as far, which is the whole point of taking deltaSeconds.
-    const Vec2 offset = direction * m_speed * deltaSeconds;
+    const Vec2 velocity = direction * m_speed;
 
     for (auto&& [entity, transform] : entities.query<components::Transform>())
     {
         static_cast<void>(entity);
-        transform.position += offset;
+        // Assigned, not accumulated, and zero when nothing is held, so releasing
+        // the keys stops the body instead of leaving it gliding.
+        transform.velocity = velocity;
     }
 }
 

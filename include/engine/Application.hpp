@@ -33,7 +33,8 @@ namespace engine
 ///
 /// Application is the only place these are wired together. It implements no
 /// behaviour of its own: there is no physics, no gameplay and no drawing code
-/// here, only ordering.
+/// here, only ordering. The simulation systems themselves are registered by the
+/// game, through `systemManager()`.
 ///
 /// ### Window ownership
 ///
@@ -56,6 +57,8 @@ namespace engine
 /// processEvents()                    window close, and keyboard into Input
 /// time.tick()                        measures this frame's real duration
 /// systemManager.update(world, in, dt) simulation systems read input, write data
+///   ├─ MovementSystem                 input -> Transform::velocity
+///   └─ PhysicsSystem                  velocity -> position, then collisions
 /// entityManager.update()             deferred destruction cleanup
 /// renderer.beginFrame()              RENDER: start the frame
 /// renderer.clear(background)         RENDER: configured background colour
@@ -66,6 +69,12 @@ namespace engine
 /// The event, update, render, display high-level order from Phase 1 is intact.
 /// Systems run before cleanup, so an entity a system flagged this frame is
 /// erased only once nothing is iterating.
+///
+/// The systems shown inside `systemManager.update` are registered by whoever
+/// builds the game, not here: `Application` owns the loop and orders the pass,
+/// but it does not decide what simulates. `PhysicsSystem` must be registered
+/// after `MovementSystem`, because registration order is update order and
+/// movement is what produces the velocity physics integrates.
 ///
 /// `input.beginFrame()` runs **before** `processEvents()` on purpose. It clears
 /// only the frame-local transients, so clearing can never discard an event that
