@@ -4,6 +4,7 @@
 #include "engine/math/Vec2.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 
 namespace engine
 {
@@ -27,7 +28,11 @@ constexpr Color kWindowBackground = toColor(config::kBackgroundColorRed, config:
 Application::Application()
     : m_window(sf::VideoMode{config::kWindowWidth, config::kWindowHeight}, config::kWindowTitle), m_time{},
       m_input{}, m_entityManager{}, m_systemManager{}, m_camera{}, m_renderer{m_window},
-      m_renderSystem{m_renderer, m_camera}, m_isRunning{true}
+      m_assets{std::filesystem::path{config::kAssetsConfig}},
+      // Borrowed by const reference, and declared after all three so they are
+      // already alive. See the member ordering note in Application.hpp for why the
+      // declaration order, and not just this line, is what makes it safe.
+      m_renderSystem{m_renderer, m_camera, m_assets}, m_isRunning{true}
 {
     m_window.setFramerateLimit(config::kFramerateLimit);
 

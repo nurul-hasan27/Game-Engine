@@ -26,6 +26,14 @@ inline constexpr unsigned char kBackgroundColorRed = @ENGINE_BACKGROUND_COLOR_RE
 inline constexpr unsigned char kBackgroundColorGreen = @ENGINE_BACKGROUND_COLOR_GREEN@;
 inline constexpr unsigned char kBackgroundColorBlue = @ENGINE_BACKGROUND_COLOR_BLUE@;
 
+/// Absolute path to the asset configuration loaded at startup.
+///
+/// Resolved at configure time and baked in, so it never depends on the process
+/// working directory. The tradeoff is that a binary built here expects the
+/// repository at the same absolute path; a shipped game will need this resolved
+/// at runtime instead. Override with -DENGINE_ASSETS_CONFIG=<path>.
+inline constexpr char kAssetsConfig[] = "@ENGINE_ASSETS_CONFIG@";
+
 } // namespace engine::config
 
 #endif // ENGINE_ENGINE_CONFIG_HPP

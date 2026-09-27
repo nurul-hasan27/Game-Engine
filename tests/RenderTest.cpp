@@ -5,6 +5,7 @@
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Texture.hpp"
 #include "engine/components/Transform.hpp"
+#include "engine/EngineConfig.hpp"
 #include "engine/ecs/EntityManager.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/RenderTransform.hpp"
@@ -24,6 +25,8 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <map>
 #include <cstddef>
 #include <cstdlib>
@@ -125,6 +128,68 @@ private:
     bool m_cleared = false;
 };
 
+namespace assets = engine::assets;
+namespace components = engine::components;
+namespace graphics = engine::graphics;
+namespace config = engine::config;
+using engine::Application;
+using engine::Color;
+using engine::Vec2;
+using engine::components::Rectangle;
+using engine::components::Transform;
+using engine::ecs::Entity;
+using engine::ecs::EntityManager;
+using engine::graphics::Camera;
+using engine::graphics::RenderTransform;
+using engine::input::Input;
+using engine::graphics::Renderer;
+using engine::systems::RenderSystem;
+
+/// A test double asset manager.
+///
+/// Hands back stable, empty handles and records which names were asked for. Empty
+/// is sufficient here because the recording renderer never looks inside a handle,
+/// only records its address; the groups that need real pixels use a real
+/// `SfmlAssetManager` and a real window instead.
+class FakeAssetManager final : public assets::AssetManager
+{
+public:
+    const assets::Texture& texture(const std::string_view name) const override
+    {
+        m_requested.emplace_back(name);
+
+        const auto found = m_textures.find(std::string{name});
+        if (found == m_textures.end())
+        {
+            throw assets::AssetNotFoundError{"no texture named '" + std::string{name} + "'"};
+        }
+
+        return found->second;
+    }
+
+    const assets::Font& font(const std::string_view name) const override
+    {
+        const std::string key{name};
+        const auto found = m_fonts.find(key);
+        if (found == m_fonts.end())
+        {
+            throw assets::AssetNotFoundError{"no font named '" + key + "'"};
+        }
+
+        return found->second;
+    }
+
+    /// Pre-declares a name, so `texture(name)` will resolve.
+    void declare(const std::string& name) { m_textures.emplace(name, assets::Texture{}); }
+
+    [[nodiscard]] const std::vector<std::string>& requested() const noexcept { return m_requested; }
+
+private:
+    mutable std::map<std::string, assets::Texture> m_textures;
+    mutable std::map<std::string, assets::Font> m_fonts;
+    mutable std::vector<std::string> m_requested;
+};
+
 /// A test-only system that moves Transforms, to prove the render system and the
 /// simulation systems compose.
 class DriftSystem final : public engine::ecs::System
@@ -143,20 +208,6 @@ public:
     [[nodiscard]] const char* name() const override { return "DriftSystem"; }
 };
 
-namespace assets = engine::assets;
-namespace components = engine::components;
-namespace graphics = engine::graphics;
-using engine::Color;
-using engine::Vec2;
-using engine::components::Rectangle;
-using engine::components::Transform;
-using engine::ecs::Entity;
-using engine::ecs::EntityManager;
-using engine::graphics::Camera;
-using engine::graphics::RenderTransform;
-using engine::input::Input;
-using engine::graphics::Renderer;
-using engine::systems::RenderSystem;
 
 /// The default camera: position `(0, 0)`, zoom `1`, viewport `(0, 0)`.
 ///
@@ -362,7 +413,8 @@ void testRenderSystemDrawsMatchingEntities()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{100.0F, 100.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
@@ -386,7 +438,8 @@ void testRenderSystemIgnoresEntitiesMissingComponents()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     // Only a Transform: nothing to draw.
     Entity& transformOnly = manager.addEntity("transformOnly");
@@ -410,7 +463,8 @@ void testRenderSystemIgnoresDeadEntities()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& alive = manager.addEntity("alive");
     alive.addComponent<Transform>();
@@ -440,7 +494,8 @@ void testRenderSystemDrawsManyEntities()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     for (int i = 0; i < 16; ++i)
     {
@@ -461,7 +516,8 @@ void testRenderSystemMapsTransformIntoDrawCalls()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{50.0F, 60.0F}, Vec2{0.0F, 0.0F}, Vec2{2.0F, 3.0F}, kPi / 2.0F});
@@ -491,7 +547,8 @@ void testRenderSystemAppliesTheCameraToDrawCalls()
     engine::graphics::Camera camera;
     camera.setViewport(Vec2{1280.0F, 720.0F});
     camera.setPosition(Vec2{1000.0F, 500.0F});
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{1100.0F, 500.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
@@ -515,7 +572,8 @@ void testRenderSystemAppliesCameraZoomToDrawCalls()
     engine::graphics::Camera camera;
     camera.setViewport(Vec2{1280.0F, 720.0F});
     camera.setZoom(2.0F);
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& entity = manager.addEntity("entity");
     // A non-unit Transform::scale, so composing zoom with scale can be told
@@ -544,7 +602,8 @@ void testRenderSystemDoesNotModifyTheTransform()
     camera.setViewport(Vec2{1280.0F, 720.0F});
     camera.setPosition(Vec2{-5000.0F, 2500.0F});
     camera.setZoom(3.5F);
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{640.0F, 360.0F}, Vec2{9.0F, 9.0F}, Vec2{1.5F, 2.5F}, 0.75F});
@@ -580,7 +639,8 @@ void testRenderSystemRunsAfterSimulationSystems()
     engine::ecs::SystemManager systems;
     systems.add<DriftSystem>();
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     Entity& entity = manager.addEntity("entity");
     entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{100.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
@@ -603,7 +663,8 @@ void testRenderSystemDoesNotOwnEntities()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     {
         engine::ecs::SystemManager systems;
@@ -627,7 +688,8 @@ void testRendererFrameProtocol()
     [[maybe_unused]] engine::input::Input input;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    FakeAssetManager assets;
+    RenderSystem renderSystem{renderer, camera, assets};
 
     // A full frame, in the order the Renderer contract documents.
     renderer.beginFrame();
@@ -1010,51 +1072,6 @@ void testApplicationSurvivesNoRenderableEntities()
 // 33 groups above were not edited to accommodate any of this.
 // ---------------------------------------------------------------------------
 
-/// A test double asset manager.
-///
-/// Hands back stable, empty handles and records which names were asked for. Empty
-/// is sufficient here because the recording renderer never looks inside a handle,
-/// only records its address; the groups that need real pixels use a real
-/// `SfmlAssetManager` and a real window instead.
-class FakeAssetManager final : public assets::AssetManager
-{
-public:
-    const assets::Texture& texture(const std::string_view name) const override
-    {
-        m_requested.emplace_back(name);
-
-        const auto found = m_textures.find(std::string{name});
-        if (found == m_textures.end())
-        {
-            throw assets::AssetNotFoundError{"no texture named '" + std::string{name} + "'"};
-        }
-
-        return found->second;
-    }
-
-    const assets::Font& font(const std::string_view name) const override
-    {
-        const std::string key{name};
-        const auto found = m_fonts.find(key);
-        if (found == m_fonts.end())
-        {
-            throw assets::AssetNotFoundError{"no font named '" + key + "'"};
-        }
-
-        return found->second;
-    }
-
-    /// Pre-declares a name, so `texture(name)` will resolve.
-    void declare(const std::string& name) { m_textures.emplace(name, assets::Texture{}); }
-
-    [[nodiscard]] const std::vector<std::string>& requested() const noexcept { return m_requested; }
-
-private:
-    mutable std::map<std::string, assets::Texture> m_textures;
-    mutable std::map<std::string, assets::Font> m_fonts;
-    mutable std::vector<std::string> m_requested;
-};
-
 /// A textured entity, wired the way a game would wire one: a name in the
 /// component, everything else in the transform.
 Entity& addTexturedEntity(EntityManager& manager, const std::string& name, const Vec2& position,
@@ -1357,33 +1374,47 @@ void testMissingAssetNamePropagates()
     CHECK(renderer.textureDraws().empty());
 }
 
-void testRenderSystemWithoutAnAssetManagerReportsIt()
+void testRenderSystemHasNoAssetsUnavailableState()
 {
+    // The Step 7 bridge is gone. A RenderSystem cannot be built without an asset
+    // manager, so there is no "assets unavailable" state for a textured entity to
+    // stumble into, and no null check in the draw path that could be wrong.
+    //
+    // The absence of the two-argument constructor is a compile-time property, so
+    // it is asserted in the type system: a call with two arguments must not
+    // compile, and Probe's initialiser is the two-argument form.
+    using TwoArgument = RenderSystem (*)(graphics::Renderer&, const Camera&);
+    static_assert(!std::is_constructible_v<RenderSystem, graphics::Renderer&, const Camera&>,
+                  "RenderSystem must not be constructible without an AssetManager");
+    static_assert(std::is_constructible_v<RenderSystem, graphics::Renderer&, const Camera&,
+                                          const assets::AssetManager&>,
+                  "RenderSystem must be constructible with an AssetManager");
+    static_assert(!std::is_default_constructible_v<RenderSystem>, "RenderSystem must not be default constructible");
+
+    // And every constructor takes the manager, so there is no way to reach one
+    // without it. Exactly one is constructible, which is the whole point.
+    static_assert(!std::is_constructible_v<RenderSystem, graphics::Renderer&>,
+                  "the renderer alone must not be enough");
+    static_assert(!std::is_constructible_v<RenderSystem, const assets::AssetManager&>,
+                  "the asset manager alone must not be enough");
+
+    static_assert(sizeof(TwoArgument) == sizeof(void*), "unused, keeps the alias honest");
+
+    // A textured entity on a properly built system simply draws.
     EntityManager manager;
     RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
     [[maybe_unused]] Input input;
 
-    // The no-assets constructor, used until Application owns an AssetManager.
     const Camera camera;
-    RenderSystem renderSystem{renderer, camera};
+    RenderSystem renderSystem{renderer, camera, assets};
     renderer.beginFrame();
 
     addTexturedEntity(manager, "mario_ground", Vec2{0.0F, 0.0F});
+    renderSystem.update(manager, input, 0.0F);
 
-    bool threw = false;
-    try
-    {
-        renderSystem.update(manager, input, 0.0F);
-    }
-    catch (const std::logic_error& error)
-    {
-        threw = true;
-        // The message must name the asset, or "there is no manager" and "that
-        // texture is not declared" look identical to whoever reads it.
-        CHECK(std::string{error.what()}.find("mario_ground") != std::string::npos);
-    }
-
-    CHECK(threw);
+    CHECK(renderer.textureDraws().size() == 1U);
 }
 
 void testRectangleQueryIsUnaffectedByTextures()
@@ -1685,6 +1716,317 @@ void testRectangleRenderingIsUnchangedAlongsideTextures()
     CHECK(inTexture.b == 19);
 }
 
+// ---------------------------------------------------------------------------
+// Step 8: Application owns the asset manager.
+//
+// Before this step, RenderSystem could be built without one, and a nullable
+// member carried the "assets unavailable" state. Now Application owns the
+// manager, hands it down by reference, and the bridge is gone. These groups
+// prove the ownership, the wiring, and the absence of the old state.
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] std::string readEngineSource(const char* const path)
+{
+    std::ifstream file{path};
+    if (!file)
+    {
+        std::cerr << "    unable to read source file: " << path << '\n';
+        CHECK(false);
+        return {};
+    }
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+void testApplicationConstructsWithTheRealConfiguration()
+{
+    // Construction loads the configured assets, so simply getting here means the
+    // shipped configuration was read and every file in it opened. A missing or
+    // broken configuration would have thrown before this line.
+    Application application;
+
+    // The configured path is absolute, so nothing about loading can depend on
+    // where the process happens to be. A relative path here would be a working
+    // directory assumption wearing a disguise.
+    CHECK(std::filesystem::path{config::kAssetsConfig}.is_absolute());
+    CHECK(std::filesystem::exists(std::filesystem::path{config::kAssetsConfig}));
+
+    // The window is open and nothing has been presented yet.
+    CHECK(application.renderer().frameCount() == 0U);
+}
+
+/// Restores the working directory however the scope is left, including by an
+/// exception, so a failing test cannot quietly change the process for the rest of
+/// the run.
+class ScopedWorkingDirectory
+{
+public:
+    explicit ScopedWorkingDirectory(const std::filesystem::path& directory)
+        : m_original{std::filesystem::current_path()}
+    {
+        std::error_code error;
+        std::filesystem::current_path(directory, error);
+    }
+
+    ~ScopedWorkingDirectory()
+    {
+        std::error_code error;
+        std::filesystem::current_path(m_original, error);
+    }
+
+    ScopedWorkingDirectory(const ScopedWorkingDirectory&) = delete;
+    ScopedWorkingDirectory& operator=(const ScopedWorkingDirectory&) = delete;
+
+private:
+    std::filesystem::path m_original;
+};
+
+void testAssetLoadingDoesNotDependOnTheWorkingDirectory()
+{
+    // The requirement was "do not silently fall back to CWD assumptions", and a
+    // unit test asserting the configured string is absolute does not really prove
+    // it. This does: the process is moved somewhere else entirely, and the engine
+    // must still find and load exactly the same assets.
+    bool resolved = false;
+    std::string reported;
+
+    {
+        const ScopedWorkingDirectory elsewhere{std::filesystem::temp_directory_path()};
+
+        try
+        {
+            const Application application;
+            (void)application.assets().texture("mario_ground");
+            resolved = true;
+        }
+        catch (const std::exception& error)
+        {
+            reported = error.what();
+        }
+    }
+
+    if (!resolved)
+    {
+        std::cerr << "    loading failed from a different working directory: " << reported << '\n';
+    }
+    CHECK(resolved);
+}
+
+void testApplicationOwnsALoadedAssetManager()
+{
+    const Application application;
+
+    // A real asset, resolvable by its configured name, and the same object every
+    // time: one manager, loaded once, owned by the Application.
+    const assets::Texture& first = application.assets().texture("mario_ground");
+    const assets::Texture& second = application.assets().texture("mario_ground");
+    CHECK(&first == &second);
+
+    // And a name that is not configured is still refused, loudly, through the
+    // same manager. Nothing about owning it made the lookup laxer.
+    bool threw = false;
+    try
+    {
+        (void)application.assets().texture("definitely_not_configured");
+    }
+    catch (const assets::AssetNotFoundError&)
+    {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+void testATexturedEntityRendersThroughTheApplication()
+{
+    // The integration that Step 7 could not reach: not a RenderSystem built in a
+    // test, but the one the Application owns.
+    //
+    // This is the proof that Application's manager actually reaches RenderSystem.
+    // "mario_ground" exists only in the shipped configuration, so if the render
+    // system were looking anywhere else the lookup would throw AssetNotFoundError
+    // out of run(). Reaching EXIT_SUCCESS means the name resolved.
+    Application application;
+
+    Entity& entity = application.entityManager().addEntity("mario_ground");
+    entity.addComponent<Transform>(Transform{Vec2{100.0F, 100.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    entity.addComponent<components::Texture>(components::Texture{"mario_ground"});
+
+    CHECK(application.run(3) == EXIT_SUCCESS);
+    CHECK(application.renderer().frameCount() == 3U);
+
+    // A rectangle in the same application still renders, so owning assets did not
+    // cost the existing path anything.
+    Entity& rectangle = application.entityManager().addEntity("rectangle");
+    rectangle.addComponent<Transform>(Transform{Vec2{50.0F, 50.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    rectangle.addComponent<Rectangle>(Rectangle{Vec2{20.0F, 20.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
+
+    CHECK(application.run(2) == EXIT_SUCCESS);
+    CHECK(application.renderer().frameCount() == 5U);
+}
+
+void testAnUndeclaredTextureNameStillFailsLoudlyThroughTheApplication()
+{
+    // The other half of the wiring proof. If the render system were skipping
+    // unresolvable names, this frame would succeed and the test would be showing
+    // a silent failure instead. The error has to escape run().
+    Application application;
+
+    Entity& entity = application.entityManager().addEntity("ghost");
+    entity.addComponent<Transform>(Transform{Vec2{10.0F, 10.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    entity.addComponent<components::Texture>(components::Texture{"not_configured_anywhere"});
+
+    bool threw = false;
+    try
+    {
+        (void)application.run(2);
+    }
+    catch (const assets::AssetNotFoundError&)
+    {
+        threw = true;
+    }
+
+    CHECK(threw);
+}
+
+void testRenderSystemDoesNotOwnTheAssetManager()
+{
+    // Two independent guarantees.
+    //
+    // First, the type system already forbids ownership: AssetManager is abstract,
+    // so it has no size and cannot be a by-value member of anything. There is no
+    // way for RenderSystem to hold one, whatever it wanted to.
+    static_assert(std::is_abstract_v<assets::AssetManager>, "AssetManager must stay abstract");
+    static_assert(!std::is_default_constructible_v<assets::AssetManager>,
+                  "an abstract interface cannot be a by-value member, which is what stops "
+                  "RenderSystem owning one");
+
+    // Second, the header says it holds a reference. A raw pointer could be null
+    // again, and the "never null" guarantee is only worth something if the type
+    // cannot express otherwise.
+    const std::string header = readEngineSource(ENGINE_RENDER_SYSTEM_HEADER);
+    CHECK(!header.empty());
+    if (header.empty())
+    {
+        return;
+    }
+
+    CHECK(header.find("const assets::AssetManager& m_assets;") != std::string::npos);
+    CHECK(header.find("const assets::AssetManager* m_assets") == std::string::npos);
+    CHECK(header.find("assets::AssetManager m_assets") == std::string::npos);
+
+    // And the temporary two-argument constructor really is gone, not just unused.
+    CHECK(header.find("RenderSystem(graphics::Renderer& renderer, const graphics::Camera& camera)") ==
+          std::string::npos);
+}
+
+void testApplicationMemberOrderGivesTheManagerTheLongerLife()
+{
+    // Destruction is the reverse of declaration, so the guarantee that the asset
+    // manager outlives the render system is a property of the declaration order.
+    // That is invisible to the compiler and to any runtime test, so it is checked
+    // against the header text rather than trusted to a comment.
+    const std::string header = readEngineSource(ENGINE_APPLICATION_HEADER);
+    CHECK(!header.empty());
+    if (header.empty())
+    {
+        return;
+    }
+
+    const std::size_t window = header.find("sf::RenderWindow m_window;");
+    const std::size_t camera = header.find("graphics::Camera m_camera;");
+    const std::size_t renderer = header.find("graphics::SfmlRenderer m_renderer;");
+    const std::size_t assets = header.find("assets::SfmlAssetManager m_assets;");
+    const std::size_t renderSystem = header.find("systems::RenderSystem m_renderSystem;");
+
+    CHECK(window != std::string::npos);
+    CHECK(camera != std::string::npos);
+    CHECK(renderer != std::string::npos);
+    CHECK(assets != std::string::npos);
+    CHECK(renderSystem != std::string::npos);
+
+    if (window == std::string::npos || camera == std::string::npos || renderer == std::string::npos ||
+        assets == std::string::npos || renderSystem == std::string::npos)
+    {
+        return;
+    }
+
+    // Everything the render system borrows is declared before it, so all of it is
+    // still alive when the render system is destroyed.
+    CHECK(renderSystem > renderer);
+    CHECK(renderSystem > camera);
+    CHECK(renderSystem > assets);
+
+    // The renderer binds to the window, so the window comes first.
+    CHECK(renderer > window);
+
+    // And Application owns a manager by value rather than holding a pointer to
+    // one, which is what makes the lifetime automatic rather than a matter of
+    // somebody remembering to clean up.
+    CHECK(header.find("assets::AssetManager* m_assets") == std::string::npos);
+}
+
+void testThereIsNoGlobalOrStaticAssetManager()
+{
+    // The engine has no singletons and no global state, and an asset manager is
+    // exactly the thing that would tempt someone into one. Nothing in the engine
+    // may hold an AssetManager except Application's member and RenderSystem's
+    // reference to it.
+    //
+    // A file-scope declaration is the thing being ruled out, so the scan is over
+    // the engine's own sources and looks for a static or namespace-scope manager.
+    const char* const files[] = {ENGINE_APPLICATION_HEADER, ENGINE_RENDER_SYSTEM_HEADER, ENGINE_APPLICATION_SOURCE,
+                                ENGINE_RENDER_SYSTEM_SOURCE};
+
+    for (const char* const file : files)
+    {
+        const std::string source = readEngineSource(file);
+        CHECK(!source.empty());
+        if (source.empty())
+        {
+            continue;
+        }
+
+        // No static or thread_local manager, and no instance at namespace scope.
+        CHECK(source.find("static assets::AssetManager") == std::string::npos);
+        CHECK(source.find("thread_local") == std::string::npos);
+        CHECK(source.find("inline assets::AssetManager") == std::string::npos);
+    }
+
+    // The only place a manager is *held* is Application's member, and everywhere
+    // else it is a reference parameter or a member reference.
+    const std::string applicationHeader = readEngineSource(ENGINE_APPLICATION_HEADER);
+    CHECK(applicationHeader.find("const assets::AssetManager& assets() const noexcept") != std::string::npos);
+}
+
+void testApplicationHandsOutTheInterfaceNotTheConcreteManager()
+{
+    // Application owns the concrete manager but exposes the interface, by const
+    // reference. That is what stops a caller reaching past the read-only
+    // contract to reload or replace an asset and invalidating references the
+    // render system is holding.
+    static_assert(std::is_same_v<decltype(std::declval<const Application&>().assets()),
+                                 const assets::AssetManager&>,
+                  "Application must expose the interface by const reference");
+
+    Application application;
+    static_assert(std::is_abstract_v<assets::AssetManager>, "the exposed type must be the abstract interface");
+
+    // The same manager on every call: one instance, owned by the Application,
+    // rather than something rebuilt per access.
+    CHECK(&application.assets() == &application.assets());
+
+    // And it really is the manager holding the loaded resources: two configured
+    // names resolve to two different objects, and each is stable across calls.
+    // Comparing two runtime values, rather than asking whether a reference is
+    // null, which is a question with only one possible answer.
+    const assets::Texture& ground = application.assets().texture("mario_ground");
+    const assets::Texture& stand = application.assets().texture("megaman_megaStand");
+    CHECK(&ground != &stand);
+    CHECK(&ground == &application.assets().texture("mario_ground"));
+}
+
 } // namespace
 
 int main()
@@ -1734,7 +2076,7 @@ int main()
         {"transform scale scales the texture", &testTransformScaleScalesTheTexture},
         {"camera zoom scales the texture without moving it", &testCameraZoomScalesTheTextureWithoutMovingIt},
         {"missing asset name propagates", &testMissingAssetNamePropagates},
-        {"render system without an asset manager reports it", &testRenderSystemWithoutAnAssetManagerReportsIt},
+        {"render system has no assets-unavailable state", &testRenderSystemHasNoAssetsUnavailableState},
         {"rectangle query is unaffected by textures", &testRectangleQueryIsUnaffectedByTextures},
         {"textures are drawn after rectangles", &testTexturesAreDrawnAfterRectangles},
         {"an entity with both components draws both rectangle first", &testAnEntityWithBothComponentsDrawsBothRectangleFirst},
@@ -1744,6 +2086,15 @@ int main()
         {"texture scale affects rendered pixels", &testTextureScaleAffectsRenderedPixels},
         {"camera zoom affects rendered texture pixels", &testCameraZoomAffectsRenderedTexturePixels},
         {"rectangle rendering is unchanged alongside textures", &testRectangleRenderingIsUnchangedAlongsideTextures},
+        {"application constructs with the real configuration", &testApplicationConstructsWithTheRealConfiguration},
+        {"asset loading does not depend on the working directory", &testAssetLoadingDoesNotDependOnTheWorkingDirectory},
+        {"application owns a loaded asset manager", &testApplicationOwnsALoadedAssetManager},
+        {"a textured entity renders through the application", &testATexturedEntityRendersThroughTheApplication},
+        {"an undeclared texture name still fails loudly through the application", &testAnUndeclaredTextureNameStillFailsLoudlyThroughTheApplication},
+        {"render system does not own the asset manager", &testRenderSystemDoesNotOwnTheAssetManager},
+        {"application member order gives the manager the longer life", &testApplicationMemberOrderGivesTheManagerTheLongerLife},
+        {"there is no global or static asset manager", &testThereIsNoGlobalOrStaticAssetManager},
+        {"application hands out the interface not the concrete manager", &testApplicationHandsOutTheInterfaceNotTheConcreteManager},
     };
 
     int failedGroups = 0;

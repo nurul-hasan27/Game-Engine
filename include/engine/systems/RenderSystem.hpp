@@ -54,27 +54,22 @@ class RenderSystem final : public engine::ecs::System
 public:
     /// The renderer, the camera and the assets are all referenced, not owned: the
     /// window, its context, the view onto the world and every loaded image belong
-    /// to `Application` and the `AssetManager`, and a system must never own the
-    /// things it draws with.
+    /// to `Application`, and a system must never own the things it draws with.
     ///
-    /// The asset manager is only read, to resolve a name into a handle. The system
-    /// does not load, cache or keep one.
+    /// All three are **required**. There is deliberately no overload that omits the
+    /// asset manager and no "assets unavailable" state: a render system that could
+    /// exist without a way to resolve an asset name would have to decide what to
+    /// do about a textured entity at draw time, and every answer to that is wrong
+    /// somewhere - skipping it hides the problem, and failing mid-frame is a
+    /// worse place to find out. `Application` owns the manager and passes it here,
+    /// so a `RenderSystem` always has one.
+    ///
+    /// The manager is only read, to resolve a name into a handle. The system does
+    /// not load, cache or keep one, and cannot add, replace or remove an asset:
+    /// the interface it is handed through is const, so it has no way to.
     RenderSystem(graphics::Renderer& renderer, const graphics::Camera& camera,
                  const assets::AssetManager& assets) noexcept
-        : m_renderer{&renderer}, m_camera{&camera}, m_assets{&assets}
-    {
-    }
-
-    /// No assets configured.
-    ///
-    /// A temporary bridge for callers that have no `AssetManager` to hand over
-    /// yet. The rectangle query is unaffected; if any entity carries a
-    /// `components::Texture` the frame fails with a clear error rather than
-    /// quietly drawing nothing, because "there is no asset manager" and "that
-    /// texture is not declared" are different problems and should not look the
-    /// same. This overload is removed once `Application` owns an `AssetManager`.
-    RenderSystem(graphics::Renderer& renderer, const graphics::Camera& camera) noexcept
-        : m_renderer{&renderer}, m_camera{&camera}, m_assets{nullptr}
+        : m_renderer{&renderer}, m_camera{&camera}, m_assets{assets}
     {
     }
 
@@ -89,9 +84,14 @@ private:
     graphics::Renderer* m_renderer = nullptr;
     const graphics::Camera* m_camera = nullptr;
 
-    /// Null only when constructed through the no-assets overload above. Never
-    /// dereferenced without checking, and checked by the texture query before use.
-    const assets::AssetManager* m_assets = nullptr;
+    /// A reference, not a nullable pointer, because there is no valid empty state
+    /// to represent: the manager is a construction requirement. A pointer here
+    /// would be a member that can only ever be null by mistake, and every use
+    /// would carry a null check for a case the type should have made impossible.
+    ///
+    /// Bound once in the constructor and never rebound, which is what lets the
+    /// `Application` member order guarantee the manager outlives this system.
+    const assets::AssetManager& m_assets;
 };
 
 } // namespace engine::systems

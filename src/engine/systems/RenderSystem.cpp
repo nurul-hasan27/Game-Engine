@@ -5,9 +5,6 @@
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
 
-#include <stdexcept>
-#include <string>
-
 namespace engine::systems
 {
 
@@ -54,15 +51,12 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, input::Input& in
     {
         static_cast<void>(entity);
 
-        if (m_assets == nullptr)
-        {
-            throw std::logic_error{"RenderSystem has no AssetManager, so the texture '"
-                                   + std::string{texture.assetName} + "' cannot be resolved"};
-        }
-
         // Same conversion as the rectangle above, so a texture and a rectangle
-        // with the same Transform land identically, zoom included.
-        m_renderer->drawTexture(m_assets->texture(texture.assetName),
+        // with the same Transform land identically, zoom included. A name that is
+        // not declared throws from the lookup, and is deliberately not caught: an
+        // entity that silently draws nothing is a bug that surfaces much later,
+        // as a missing sprite with nothing pointing at the cause.
+        m_renderer->drawTexture(m_assets.texture(texture.assetName),
                                  graphics::toRenderTransform(transform, *m_camera));
     }
 }

@@ -37,6 +37,23 @@ set(ENGINE_BACKGROUND_COLOR_RED 32 CACHE STRING "Red channel of the window backg
 set(ENGINE_BACKGROUND_COLOR_GREEN 36 CACHE STRING "Green channel of the window background colour")
 set(ENGINE_BACKGROUND_COLOR_BLUE 48 CACHE STRING "Blue channel of the window background colour")
 
+# The asset configuration the application loads at startup.
+#
+# An absolute path baked in at configure time, deliberately. The alternatives were
+# "look in the current directory" and "look next to the executable"; the first is
+# wrong because it makes the game depend on where it was launched from, and the
+# second is not portable and does not exist yet. A generated constant is the same
+# mechanism the window settings already use, so it stays discoverable and
+# overridable in one place.
+#
+# The limitation is real and worth stating plainly: the path is baked into the
+# binary, so a build moved to another machine still expects the repository at the
+# same absolute location. That is correct while the engine is developed against
+# its own repository, and wrong for a shipped game, which will need the location
+# resolved at runtime - beside the executable, or passed in. See Application.hpp.
+set(ENGINE_ASSETS_CONFIG "${PROJECT_SOURCE_DIR}/assets/assets.txt"
+    CACHE FILEPATH "Absolute path to the asset configuration file loaded at startup")
+
 option(ENGINE_BUILD_TESTS "Build the automated smoke tests" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------
@@ -234,7 +251,11 @@ if(ENGINE_BUILD_TESTS)
     # where the shipped configuration is. Injected rather than hard-coded so the
     # test does not assume where the repository is checked out.
     target_compile_definitions(render_test PRIVATE
-        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt")
+        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt"
+        ENGINE_APPLICATION_HEADER="${PROJECT_SOURCE_DIR}/include/engine/Application.hpp"
+        ENGINE_APPLICATION_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/Application.cpp"
+        ENGINE_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/RenderSystem.hpp"
+        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp")
     add_test(NAME render.foundation COMMAND render_test)
     set_tests_properties(render.foundation PROPERTIES TIMEOUT 60)
 
