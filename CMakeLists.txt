@@ -312,6 +312,7 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(asset_loader_test PRIVATE ${ENGINE_WARNING_FLAGS})
     target_compile_definitions(asset_loader_test PRIVATE
         ENGINE_ASSET_LIBRARY_DIR="${PROJECT_SOURCE_DIR}/assets/library"
+        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt"
         ENGINE_SFML_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/SfmlAssetManager.hpp")
     add_test(NAME assets.loading COMMAND asset_loader_test)
     set_tests_properties(assets.loading PROPERTIES TIMEOUT 120)

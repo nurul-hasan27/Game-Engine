@@ -1,0 +1,58 @@
+# engine asset configuration
+#
+# One asset per line, in the format the parser accepts:
+#
+#     Texture <name> <path>
+#     Font    <name> <path>
+#
+# Paths are relative to the directory containing this file, not to the
+# process working directory, so this configuration and the library it
+# names can be moved together as a unit.
+#
+# Names are unique across the whole file, not just within a type. A texture
+# name and a font name cannot be the same word, because an asset is
+# referred to by its name alone.
+#
+# Names are derived from the path: the containing folder, then the file's
+# stem, so mario/ground.png is 'mario_ground'. That keeps them readable
+# without consulting the path.
+#
+# Every file in the committed library is listed, including the three that are
+# palette-indexed PNGs (animations_explosion, mario_Flagpole, mario_question).
+# They need no special entry: the loader reads them exactly as it reads the
+# rest, which is verified by a pixel comparison in the test suite.
+
+# --- animations --------------------------------------------------
+Texture animations_QuestionBlock   library/images/animations/QuestionBlock.png
+Texture animations_coinspin        library/images/animations/coinspin.png
+Texture animations_explosion       library/images/animations/explosion.png
+
+# --- mario -------------------------------------------------------
+Texture mario_BigBush              library/images/mario/BigBush.png
+Texture mario_BigCloud             library/images/mario/BigCloud.png
+Texture mario_Busher               library/images/mario/Busher.png
+Texture mario_Flagpole             library/images/mario/Flagpole.png
+Texture mario_GoombaDeath          library/images/mario/GoombaDeath.png
+Texture mario_GoombaWalk           library/images/mario/GoombaWalk.png
+Texture mario_SmallBush            library/images/mario/SmallBush.png
+Texture mario_SmallCloud           library/images/mario/SmallCloud.png
+Texture mario_SmallPipe            library/images/mario/SmallPipe.png
+Texture mario_TallPipe             library/images/mario/TallPipe.png
+Texture mario_cloudsmall           library/images/mario/cloudsmall.png
+Texture mario_coin                 library/images/mario/coin.png
+Texture mario_ground               library/images/mario/ground.png
+Texture mario_question             library/images/mario/question.png
+Texture mario_question2            library/images/mario/question2.png
+
+# --- megaman -----------------------------------------------------
+Texture megaman_megaBuster         library/images/megaman/megaBuster.png
+Texture megaman_megaJump           library/images/megaman/megaJump.png
+Texture megaman_megaRun            library/images/megaman/megaRun.png
+Texture megaman_megaShot           library/images/megaman/megaShot.png
+Texture megaman_megaSlit           library/images/megaman/megaSlit.png
+Texture megaman_megaStand          library/images/megaman/megaStand.png
+
+# --- fonts -------------------------------------------------------
+Font fonts_numbers              library/fonts/numbers.ttf
+Font fonts_pixeled              library/fonts/pixeled.ttf
+Font fonts_tech                 library/fonts/tech.ttf

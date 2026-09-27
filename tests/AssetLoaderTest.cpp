@@ -8,6 +8,7 @@
 #include <SFML/Graphics/Image.hpp>
 #include <SFML/Graphics/Texture.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <cstdlib>
@@ -226,6 +227,46 @@ private:
     }
 
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// The shipped configuration
+// ---------------------------------------------------------------------------
+
+/// The configuration the engine actually ships, as an absolute path.
+[[nodiscard]] fs::path shippedConfiguration() { return fs::path{ENGINE_ASSET_CONFIG}; }
+
+/// The contents of the shipped configuration, as text.
+[[nodiscard]] std::string readShippedConfiguration()
+{
+    std::ifstream file{shippedConfiguration()};
+    if (!file)
+    {
+        throw std::runtime_error{"could not read " + shippedConfiguration().string()};
+    }
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+/// The shipped configuration parsed, through the same parser the loader uses.
+[[nodiscard]] std::vector<engine::assets::AssetEntry> parseShippedConfiguration()
+{
+    return engine::assets::parseAssetFile(readShippedConfiguration());
+}
+
+/// Every path a shipped configuration entry points at, resolved the way the
+/// loader resolves it: against the directory containing the configuration.
+[[nodiscard]] std::vector<fs::path> resolvedShippedPaths()
+{
+    const fs::path base = shippedConfiguration().parent_path();
+    std::vector<fs::path> paths;
+    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    {
+        paths.push_back(base / entry.path);
+    }
+    return paths;
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,6 +1045,193 @@ void testTheManagerSurvivesEveryDeclaredAssetBeingUsed()
     }
 }
 
+// ---------------------------------------------------------------------------
+// The shipped configuration
+//
+// assets/assets.txt is data, not code, so nothing about it is enforced by
+// compiling it. These groups are what stop it rotting: a path that stops existing,
+// an asset added to the library and never declared, a name that collides, or a
+// declared file that will not load.
+// ---------------------------------------------------------------------------
+
+void testTheShippedConfigurationParses()
+{
+    // Through the real parser, not a looser one. A configuration the loader would
+    // reject is worthless, so this is the only version of the check that matters.
+    const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
+
+    CHECK(entries.size() == 27U);
+}
+
+void testTheShippedConfigurationHasTheExpectedEntryCounts()
+{
+    const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
+
+    std::size_t textures = 0;
+    std::size_t fonts = 0;
+    for (const engine::assets::AssetEntry& entry : entries)
+    {
+        if (entry.type == engine::assets::AssetType::Texture)
+        {
+            ++textures;
+        }
+        else
+        {
+            ++fonts;
+        }
+    }
+
+    // 24 images and 3 fonts, which is the whole committed library. The group below
+    // derives the same numbers from the library itself, so this one is the
+    // statement of intent rather than a second guess at the same fact.
+    CHECK(textures == 24U);
+    CHECK(fonts == 3U);
+    CHECK(textures + fonts == 27U);
+}
+
+void testEveryConfiguredPathExists()
+{
+    const std::vector<fs::path> paths = resolvedShippedPaths();
+
+    CHECK(paths.size() == 27U);
+
+    for (const fs::path& path : paths)
+    {
+        // Opened rather than stat-ed, the way the loader checks, so a file that
+        // exists but cannot be read is caught here too.
+        std::ifstream file{path, std::ios::binary};
+        if (!file)
+        {
+            std::cerr << "    configured path does not open: " << path << '\n';
+            CHECK(false);
+        }
+    }
+}
+
+void testConfiguredNamesAreUnique()
+{
+    const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
+
+    // The parser already rejects a duplicate, so reaching this point means they
+    // are unique. Asserting it directly states the property instead of relying on
+    // the absence of an exception, so the reason for the pass is visible.
+    std::vector<std::string> names;
+    for (const engine::assets::AssetEntry& entry : entries)
+    {
+        names.push_back(entry.name);
+    }
+
+    std::sort(names.begin(), names.end());
+    const auto last = std::unique(names.begin(), names.end());
+    CHECK(static_cast<std::size_t>(last - names.begin()) == names.size());
+
+    // And never empty, which a whitespace separated format makes easy to produce
+    // by accident and which would be unusable as a key.
+    for (const std::string& name : names)
+    {
+        CHECK(!name.empty());
+    }
+}
+
+void testTheShippedConfigurationNamesEveryLibraryFile()
+{
+    // The cross-check that makes the configuration trustworthy in both
+    // directions: every image and font in the library is declared, and every
+    // declaration points at a library file. A file added to the library without a
+    // declaration, or a declaration left behind after a file was removed, both
+    // fail here - and neither is caught by a count on its own.
+    std::vector<std::string> declared;
+    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    {
+        declared.push_back(entry.path);
+    }
+    std::sort(declared.begin(), declared.end());
+
+    std::vector<std::string> present;
+    for (const fs::directory_entry& entry : fs::recursive_directory_iterator{libraryDirectory()})
+    {
+        if (!entry.is_regular_file() || (entry.path().extension() != ".png" && entry.path().extension() != ".ttf"))
+        {
+            continue;
+        }
+
+        // Library-relative, which is the form the configuration stores.
+        present.push_back("library/" + fs::relative(entry.path(), libraryDirectory()).generic_string());
+    }
+    std::sort(present.begin(), present.end());
+
+    CHECK(present.size() == 27U);
+    CHECK(declared == present);
+}
+
+void testEveryConfiguredAssetLoadsThroughTheManager()
+{
+    // The end-to-end statement: the shipped configuration, loaded by the real
+    // loader, resolves every name to a real resource. Constructing the manager
+    // already throws if any file will not load, so reaching the checks below means
+    // all 27 loaded.
+    const SfmlAssetManager manager{shippedConfiguration()};
+
+    CHECK(manager.textureCount() == 24U);
+    CHECK(manager.fontCount() == 3U);
+
+    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    {
+        if (entry.type == engine::assets::AssetType::Texture)
+        {
+            const sf::Texture& texture = manager.nativeTexture(manager.texture(entry.name));
+            if (texture.getSize().x == 0U || texture.getSize().y == 0U)
+            {
+                std::cerr << "    configured texture has no pixels: " << entry.name << '\n';
+                CHECK(false);
+            }
+        }
+        else
+        {
+            const sf::Font& font = manager.nativeFont(manager.font(entry.name));
+            if (font.getInfo().family.empty())
+            {
+                std::cerr << "    configured font did not parse: " << entry.name << '\n';
+                CHECK(false);
+            }
+        }
+    }
+}
+
+void testTheIndexedPngsAreOrdinaryEntries()
+{
+    // The three palette-indexed files need no special configuration, and this
+    // says so by finding them as plain Texture entries with the usual shape. If
+    // anyone ever gives them a special syntax, it stops matching.
+    const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
+
+    const std::vector<std::pair<std::string, std::string>> expected = {
+        {"animations_explosion", "library/images/animations/explosion.png"},
+        {"mario_Flagpole", "library/images/mario/Flagpole.png"},
+        {"mario_question", "library/images/mario/question.png"},
+    };
+
+    for (const auto& [name, path] : expected)
+    {
+        bool found = false;
+        for (const engine::assets::AssetEntry& entry : entries)
+        {
+            if (entry.name == name)
+            {
+                found = true;
+                CHECK(entry.type == engine::assets::AssetType::Texture);
+                CHECK(entry.path == path);
+            }
+        }
+
+        if (!found)
+        {
+            std::cerr << "    indexed png is not configured: " << name << '\n';
+            CHECK(false);
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -1034,6 +1262,14 @@ int main()
         {"a loaded handle cannot be moved out of the manager", &testALoadedHandleCannotBeMovedOutOfTheManager},
         {"self move leaves a handle usable", &testSelfMoveLeavesAHandleUsable},
         {"the manager survives every declared asset being used", &testTheManagerSurvivesEveryDeclaredAssetBeingUsed},
+        {"the shipped configuration parses", &testTheShippedConfigurationParses},
+        {"the shipped configuration has the expected entry counts",
+         &testTheShippedConfigurationHasTheExpectedEntryCounts},
+        {"every configured path exists", &testEveryConfiguredPathExists},
+        {"configured names are unique", &testConfiguredNamesAreUnique},
+        {"the shipped configuration names every library file", &testTheShippedConfigurationNamesEveryLibraryFile},
+        {"every configured asset loads through the manager", &testEveryConfiguredAssetLoadsThroughTheManager},
+        {"the indexed pngs are ordinary entries", &testTheIndexedPngsAreOrdinaryEntries},
     };
 
     int failedGroups = 0;
