@@ -18,7 +18,10 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, input::Input& in
          entities.query<components::Transform, components::Rectangle>())
     {
         static_cast<void>(entity);
-        m_renderer->drawRectangle(rectangle.size, rectangle.color, graphics::toRenderTransform(transform));
+        // The one line where world space becomes screen space. The entity's
+        // Transform is read, never written: it stays a world position however
+        // the camera is configured.
+        m_renderer->drawRectangle(rectangle.size, rectangle.color, graphics::toRenderTransform(transform, *m_camera));
     }
 }
 

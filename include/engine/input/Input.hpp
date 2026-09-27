@@ -11,8 +11,9 @@ namespace engine::input
 ///
 /// Gameplay code names keys with this enum, never with `sf::Keyboard::Key`, so
 /// no SFML type reaches a system. The enum is deliberately small: it holds the
-/// keys this phase needs and nothing more, because a full table would be a
-/// mapping nobody has yet been asked to maintain.
+/// keys the engine currently needs and nothing more, because a full table would
+/// be a mapping nobody has yet been asked to maintain. It grows by one entry and
+/// one line in the SFML adapter when a phase needs a new key.
 ///
 /// `Unknown` stands for a physical key the engine does not track. The SFML
 /// adapter maps anything it does not recognise to `Unknown`, and `Unknown` is
@@ -30,6 +31,13 @@ enum class Key : std::uint8_t
     Down,
     Space,
     Escape,
+
+    /// Zoom in and out, added in Phase 9 so the camera demo can be driven by a
+    /// human. The engine's `graphics::Camera` has no opinion about what changes
+    /// its zoom; these keys exist only because the demo binds them to something.
+    /// See [docs/camera.md](docs/camera.md).
+    Z,
+    X,
 
     /// Sentinel used to size the state tables. Not a key.
     Count

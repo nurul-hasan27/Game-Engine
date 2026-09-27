@@ -19,25 +19,35 @@ Application  ── owns ──▶  sf::RenderWindow        (the only SFML-depen
       │                    ▲
       │                    │ holds a reference
       ├── owns ──▶  systems::RenderSystem         ── queries the ECS
-      │                    ▲
+      │                    ▲           ▲
+      │                    │           └── references (const) ──▶ graphics::Camera
       │                    │ depends on
       └── owns ──▶  ecs::EntityManager ──▶ Entity ──▶ components::Transform
-                                                      components::Rectangle
+      │                    ▲                        components::Rectangle
+      │                    │ owns (reference)
+      └── owns ──▶  graphics::Camera               (view state, no SFML types)
 ```
 
 The dependency direction is strictly downward. `EntityManager`, `Query`,
-`Entity`, `Transform`, `Rectangle` and `Time` know nothing about graphics.
-`Renderer` never queries an `EntityManager` and never sees an entity. `System`
-knows nothing about rendering. Only `RenderSystem` and `SfmlRenderer` sit on the
-boundary, and only `SfmlRenderer.cpp` includes SFML headers.
+`Entity`, `Transform`, `Rectangle`, `Time` and `Camera` know nothing about
+graphics. `Renderer` never queries an `EntityManager` and never sees an entity.
+`System` knows nothing about rendering. Only `RenderSystem` and `SfmlRenderer` sit
+on the boundary, and only `SfmlRenderer.cpp` includes SFML headers.
+
+**Changed in Phase 9:** `Application` now also owns a `graphics::Camera`, and
+`RenderSystem` holds a **const reference** to it. The camera is `const` there
+deliberately: a render system that could silently move the camera would be a very
+hard bug to find, since it would look exactly like a game that pans on its own.
+`systems::CameraSystem` holds a mutable reference and is the only thing that
+drives it.
 
 The chain the phase set out to prove, now working end to end:
 
 ```text
-Entity + Transform + Rectangle
+Entity + Transform + Rectangle                   (world space)
         ↓  query<Transform, Rectangle>()
    RenderSystem
-        ↓  toRenderTransform(...)  + rectangle size and colour
+        ↓  toRenderTransform(transform, camera)   the only world → screen conversion
    Renderer
         ↓
    SFML window
@@ -162,9 +172,11 @@ from Phase 1 stays exactly as it was.
 ## 5. Transform to render mapping
 
 ```cpp
-[[nodiscard]] constexpr RenderTransform toRenderTransform(const components::Transform&) noexcept
+[[nodiscard]] constexpr RenderTransform toRenderTransform(const components::Transform& transform,
+                                                          const Camera& camera) noexcept
 {
-    return RenderTransform{transform.position, transform.scale, transform.angle * kDegreesPerRadian};
+    return RenderTransform{camera.worldToScreen(transform.position), transform.scale * camera.zoom(),
+                           transform.angle * kDegreesPerRadian};
 }
 ```
 
@@ -173,27 +185,37 @@ type, so it is unit tested directly rather than through a window.
 
 | `Transform` | `RenderTransform` | What happens |
 | ----------- | ----------------- | ------------ |
-| `position` | `position` | passed through unchanged |
-| `scale` | `scale` | passed through unchanged, per axis |
+| `position` | `position` | **converted** world to screen by the camera |
+| `scale` | `scale` | multiplied by the camera's zoom, per axis |
 | `angle` | `rotationDegrees` | **converted** radians to degrees |
+
+**Changed in Phase 9.** The camera is a **required** parameter, with no overload
+without it. That is deliberate: an overload that silently ignored the camera
+would let a caller render a world position straight to the screen and get a
+subtly wrong picture instead of a compile error.
+
+A default-constructed camera is the **identity**: position `(0, 0)`, zoom `1`,
+viewport `(0, 0)`, so the screen centre is the origin and `worldToScreen(p) == p`.
+That is why the Phase 6 mapping tests carried into Phase 9 unchanged apart from
+passing a camera in. See [camera.md](camera.md) §2 and §4.
 
 ### Angle conversion, and why the sign is not flipped
 
-`Transform::angle` is radians. SFML wants degrees. That is the entire reason
-`RenderTransform` exists, and the conversion is a plain multiply by
-`kDegreesPerRadian` (57.2957795...).
+`Transform::angle` is radians. SFML wants degrees. That was the original reason
+`RenderTransform` existed, and the camera is now a second reason. The conversion
+is a plain multiply by `kDegreesPerRadian` (57.2957795...).
 
 The sign is deliberately **not** negated. It would be easy to assume SFML
 rotates the other way and "correct" for it, but that would be wrong here:
 
-- Engine world space and screen space share the same axes in this phase, x right
-  and y **down**.
+- Engine world space and screen space share the same axes, x right and y **down**.
 - `Vec2::rotated` and `sf::Transform::rotate` apply the *same* rotation matrix.
 
 So a direct unit conversion already produces the identical visual result, and
 negating would apply a double flip. Both outcomes are tested: a unit test asserts
 `toRenderTransform` yields `+90` for `+pi/2`, and a pixel test asserts a bar
-rotated `90` degrees appears vertical.
+rotated `90` degrees appears vertical, the latter now at a camera zoom of 2, to
+prove the camera does not disturb the rotation convention.
 
 A consequence worth stating plainly, because it is easy to trip over: with y
 pointing down, a **positive** angle appears **clockwise on screen**, even though
@@ -205,6 +227,17 @@ differ.
 `Transform` is **not** changed to degrees to match SFML. It stays in radians
 because radians are what the engine's own math uses, and a boundary bug is fixed
 at the boundary.
+
+### Why zoom rides in `scale` and not in `position`
+
+`RenderTransform::position` is absolute screen space, and `scale` is local to the
+object's centre: the renderer composes `T * R * S`, so the object grows about its
+own origin and *then* moves to its position.
+
+Zoom therefore goes in `scale` alone. A world offset of 100 units is a fixed
+number of screen pixels, not a multiple that scales with zoom, so folding the
+zoom into the position as well would scale the translation and drag objects away
+from where they belong. See [camera.md](camera.md) §11.
 
 ---
 
@@ -218,12 +251,23 @@ at the boundary.
 | y direction | increases **downward** |
 | Angle unit | radians in `Transform`, converted to degrees only at the renderer |
 | Rotation direction | positive angle turns clockwise on screen, as above |
-| World conversion layer | **none**, by design for this phase |
+| World conversion layer | **`graphics::Camera`**, added in Phase 9 |
 
-There is deliberately no world-unit, tile or zoom layer. Engine units are
-render units, which keeps the first rendering phase free of a conversion problem
-it does not yet need. A camera or world scale belongs to a later phase and will
-be the right place to introduce it.
+**Changed in Phase 9.** Until Phase 8 there was deliberately no world-unit, tile
+or zoom layer: engine units were render units, which kept the early rendering
+phases free of a conversion problem they did not yet need. There is now a
+conversion layer, and it is the camera:
+
+```text
+world position  →  Camera::worldToScreen()  →  screen position
+```
+
+That is the whole of it, and it is a pure function with no SFML type. See
+[camera.md](camera.md) for the mapping, the centre-based convention, and zoom.
+
+Engine units and render units are still both pixels. What changed is that they
+are now two *different* pixel spaces, related by the camera, rather than one
+space wearing two names.
 
 ### Position convention
 
@@ -239,6 +283,10 @@ concern that a different primitive would answer differently.
 The renderer composes the final transform as translate, then rotate, then scale.
 With the origin already at the centre, the object scales and rotates about
 itself and then moves to its position, which is the order a reader expects.
+
+That composition is also what makes zoom correct: `scale` is applied first, about
+the object's own origin, so a zoomed object grows about itself and the absolute
+screen position in `position` is not scaled along with it. See §5.
 
 ---
 

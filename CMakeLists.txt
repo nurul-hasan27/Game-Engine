@@ -107,6 +107,7 @@ add_library(engine STATIC
             src/engine/graphics/SfmlRenderer.cpp
             src/engine/input/SfmlKeyMap.cpp
             src/engine/math/Vec2.cpp
+            src/engine/systems/CameraSystem.cpp
             src/engine/systems/MovementSystem.cpp
             src/engine/systems/PhysicsSystem.cpp
             src/engine/systems/RenderSystem.cpp)
@@ -193,4 +194,11 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(physics_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME physics.collision COMMAND physics_test)
     set_tests_properties(physics.collision PROPERTIES TIMEOUT 60)
+
+    # Camera: world/screen mapping, zoom, follow, and independence from physics.
+    add_executable(camera_test tests/CameraTest.cpp)
+    target_link_libraries(camera_test PRIVATE engine)
+    target_compile_options(camera_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME camera.world_to_screen COMMAND camera_test)
+    set_tests_properties(camera.world_to_screen PROPERTIES TIMEOUT 60)
 endif()

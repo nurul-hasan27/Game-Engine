@@ -6,9 +6,9 @@ This is an **incremental** project. It is built one phase at a time, and each
 phase adds a single engine subsystem on top of a foundation that already builds
 and runs.
 
-## Current phase: 8 — Physics + Collision
+## Current phase: 9 — Camera System
 
-### Phases 1 to 7 (complete)
+### Phases 1 to 8 (complete)
 
 - **Phase 1 — Project Foundation:** CMake project, SFML window, main loop with a
   clean update/render split.
@@ -23,52 +23,57 @@ and runs.
   `components::Rectangle`, `systems::RenderSystem`.
 - **Phase 7 — Input System:** `input::Input`, `input::Key`, `input::SfmlKeyMap`,
   `systems::MovementSystem`, and the `update(world, input, dt)` signature.
+- **Phase 8 — Physics + Collision:** `components::Collider`, `components::Body`,
+  `physics::Aabb`, `systems::PhysicsSystem`.
 
-### Phase 8 — Physics + Collision (current)
+### Phase 9 — Camera System (current)
 
-- `components::Collider`: the collision box, pure data, separate from
-  `Rectangle` so collider size and draw size can differ.
-- `components::Body` and `physics::BodyType`: `Dynamic` and `Static`.
-- `physics::Aabb`: centre-based AABB, overlap test, penetration axis, minimum
-  translation vector. Entirely SFML-free.
-- `systems::PhysicsSystem`: integrate velocity, detect pairs, resolve position,
-  resolve velocity.
-- `MovementSystem` now sets **velocity** and physics owns position, so exactly
-  one system moves a body. Observable behaviour is unchanged.
-- **See [docs/physics.md](docs/physics.md)** for the AABB definition, the
-  touching-edge rule, pair iteration, resolution, and every current limitation.
+- `graphics::Camera`: position, zoom and viewport, with `worldToScreen()` and
+  `screenToWorld()`. Plain value, `constexpr`, SFML-free.
+- `graphics::toRenderTransform(transform, camera)`: the **only** place a world
+  position becomes a screen position.
+- `systems::CameraSystem`: points the camera at a tagged entity's world
+  position, re-resolved every frame so it can never hold a stale reference.
+- `RenderSystem` takes a `const Camera&` and applies it. The `Renderer`
+  interface is unchanged, and the renderer still knows nothing about the world.
+- **See [docs/camera.md](docs/camera.md)** for the coordinate model, the mapping,
+  zoom, follow, and every current limitation.
 
-The full chain the project has been building towards now runs interactively:
+The chain the project has been building towards now runs interactively:
 
 ```text
 physical key
     ↓  sf::Event            (SFML owns the physical source)
 input::Input               (the engine owns the meaning)
-    ↓  isKeyDown / isKeyPressed / isKeyReleased
+    ↓  isKeyDown / isKeyPressed
 MovementSystem             ← input becomes velocity
     ↓  query<Transform>
 components::Transform      ← velocity is data, written by a system
     ↓
-PhysicsSystem              ← velocity becomes position, and collisions resolve
+PhysicsSystem              ← velocity becomes position, collisions resolve
     ↓  query<Transform, Collider, Body>
-components::Transform      ← position is data, corrected by a system
+components::Transform      ← position is WORLD space
     ↓
-RenderSystem → Renderer → a player that stops at walls
+CameraSystem               ← target's world position becomes Camera.position
+    ↓
+graphics::Camera           ← worldToScreen(), and nothing else touches it
+    ↓
+RenderSystem → Renderer → a scrolling world, a centred player
 ```
 
-No `Player` class: the player is an entity with a `Transform`, a `Rectangle`, a
-`Collider` and a `Body`. Still no gameplay beyond that — mouse support, key
-bindings, text input, animation, cameras, rotation, gravity, audio and scenes
-are later phases.
+**The one rule: entities are never moved to follow the camera.** A
+`Transform::position` is a world position and always will be. The camera
+transforms a position only when it is drawn, so physics, movement and input stay
+entirely in world coordinates and never learn that a camera exists.
 
-This phase is deliberately small and deliberately naive:
+The demo is a 3200x1800 world, well beyond the 1280x720 viewport, with a
+boundary, three larger obstacles and a grid of pillars so the world visibly
+scrolls past. `WASD` or the arrow keys move the player, `X` zooms in and `Z`
+zooms out.
 
-- AABB only, and only axis aligned. `Transform::angle` is ignored by physics.
-- Discrete detection. A fast body can tunnel through a thin collider, and that
-  is expected, not a bug to tune away.
-- The broad phase is intentionally naive at this scale: O(N²), no spatial
-  partitioning.
-- No collision filtering. Every collider collides with every other collider.
+Deliberately absent: no camera smoothing or damping, no camera rotation, no
+bounds clamping, and **no camera culling** — every renderable entity is still
+submitted every frame.
 
 ## Requirements
 
@@ -140,10 +145,12 @@ Valid values are `Debug`, `Release`, `RelWithDebInfo` and `MinSizeRel`.
 ./build/game
 ```
 
-The window opens and stays open until you close it. The shipped demo is a small
-collision arena: a yellow player you drive with `WASD` or the arrow keys, inside a
-walled room with two static obstacles. Walk into anything and you stop against it;
-walk diagonally into a wall and you slide along it.
+The window opens and stays open until you close it. The shipped demo is a
+3200x1800 world with a boundary wall, three larger obstacles and a grid of
+pillars. A yellow player drives with `WASD` or the arrow keys and the camera
+follows, so the world scrolls past while the player stays near the middle of the
+screen. Walk into anything and you stop against it. `X` zooms in and `Z` zooms
+out by 1.25x per press.
 
 With a multi-config generator (for example `Ninja Multi-Config`) the executable
 lands in a per-configuration folder, such as `./build/Debug/game`.
@@ -164,26 +171,28 @@ cd build && ctest --output-on-failure
 | `render.foundation` | the transform-to-render mapping, `RenderSystem` filtering, and real pixel readback from a real window |
 | `input.keyboard_movement` | the key state machine, the SFML key adapter, and `MovementSystem` including diagonal normalisation |
 | `physics.collision` | AABB construction and overlap, the touching-edge rule, penetration axis, static/dynamic resolution, velocity resolution, and the input→movement→physics chain |
+| `camera.world_to_screen` | the world/screen mapping, zoom and its clamping, `screenToWorld` round trips, camera follow, system ordering, and independence from physics and input |
 
 Phase 1 had no logic worth unit testing, so the meaningful check there was that
 the application builds, runs and shuts down cleanly. Later phases added
 `math.vec2` (18 groups), `ecs.core` (26), `ecs.systems` (22),
-`runtime.timing_transform` (22), `render.foundation` (24),
-`input.keyboard_movement` (40) and `physics.collision` (35). Each group is
-reported individually with a `file:line` for every failing check. Tests use the
-plain-C++-executable style already in the project: no external test framework, no
-new dependencies.
+`runtime.timing_transform` (22), `render.foundation` (33),
+`input.keyboard_movement` (40), `physics.collision` (35) and
+`camera.world_to_screen` (35), 231 in total. Each group is reported individually
+with a `file:line` for every failing check. Tests use the plain-C++-executable
+style already in the project: no external test framework, no new dependencies.
 
 Timing tests never sleep. `Time::advance()` takes an explicit duration, so the
 clamping and accounting rules are verified deterministically on any machine; the
 one test that touches the real clock asserts only that it is wired up, using a
 generous tolerance.
 
-The render suite is split deliberately: mapping, filtering and frame protocol are
-unit tested against a recording renderer with no window, while colour, position,
-scale, rotation and clamping are checked by reading back actual pixels from a
-real SFML window. See [docs/rendering.md](docs/rendering.md) for exactly what is
-and is not verified automatically.
+The render suite is split deliberately: mapping, filtering, frame protocol and the
+camera are unit tested against a recording renderer with no window, while colour,
+position, scale, rotation, clamping and the camera's effect on real pixels are
+checked by reading back actual pixels from a real SFML window. See
+[docs/rendering.md](docs/rendering.md) for exactly what is and is not verified
+automatically.
 
 The `game` executable accepts an optional `--frames <count>` argument, used by
 the end-to-end test to stop the loop on its own instead of waiting for someone
@@ -293,9 +302,10 @@ Re-run CMake after changing one of them.
 │   │   ├── System.hpp          behaviour interface
 │   │   └── SystemManager.hpp   owns systems, runs them in order
 │   ├── graphics/
-│   │   ├── RenderTransform.hpp Transform -> render space, SFML free
-│   │   ├── Renderer.hpp        graphics interface, no SFML types
-│   │   └── SfmlRenderer.hpp    forward declares sf::RenderWindow only
+│   │   ├── Camera.hpp           world/screen mapping and zoom, SFML free
+│   │   ├── RenderTransform.hpp  Transform + Camera -> screen, SFML free
+│   │   ├── Renderer.hpp         graphics interface, no SFML types
+│   │   └── SfmlRenderer.hpp     forward declares sf::RenderWindow only
 │   ├── input/
 │   │   ├── Input.hpp           key state: down / pressed / released, SFML free
 │   │   └── SfmlKeyMap.hpp      the SFML -> engine input boundary
@@ -304,9 +314,10 @@ Re-run CMake after changing one of them.
 │   ├── physics/
 │   │   └── Aabb.hpp            AABB maths, overlap, MTV, SFML free
 │   ├── systems/
-│   │   ├── MovementSystem.hpp  reference system: input -> velocity
-│   │   ├── PhysicsSystem.hpp   velocity -> position, and collisions
-│   │   └── RenderSystem.hpp    draws Transform + Rectangle entities
+│   │   ├── CameraSystem.hpp     drives the camera from a tagged entity
+│   │   ├── MovementSystem.hpp   reference system: input -> velocity
+│   │   ├── PhysicsSystem.hpp    velocity -> position, and collisions
+│   │   └── RenderSystem.hpp     draws Transform + Rectangle entities
 │   └── EngineConfig.hpp        (generated into build/, not in the source tree)
 ├── src/
 │   ├── main.cpp                entry point: parses arguments, owns Application
@@ -325,6 +336,7 @@ Re-run CMake after changing one of them.
 │       ├── math/
 │       │   └── Vec2.cpp        operations needing sqrt, atan2, sin, cos
 │       └── systems/
+│           ├── CameraSystem.cpp
 │           ├── MovementSystem.cpp
 │           ├── PhysicsSystem.cpp
 │           └── RenderSystem.cpp
@@ -336,11 +348,13 @@ Re-run CMake after changing one of them.
 │   ├── RuntimeTest.cpp
 │   ├── RenderTest.cpp
 │   ├── InputTest.cpp
-│   └── PhysicsTest.cpp
+│   ├── PhysicsTest.cpp
+│   └── CameraTest.cpp
 ├── docs/
 │   ├── ecs.md                  ECS design and lifetime rules
 │   ├── input.md                input architecture and key state
 │   ├── physics.md              collision architecture, AABB, resolution
+│   ├── camera.md               world/screen coordinates, zoom, follow
 │   ├── rendering.md            render architecture and coordinate contract
 │   └── runtime.md              frame lifecycle, timing, Transform
 ├── assets/                     reserved for textures, fonts, sounds (later phases)
@@ -479,4 +493,41 @@ Re-run CMake after changing one of them.
 - Phase 8 uses **discrete** collision detection. A fast body can tunnel through a
   thin collider in one step, which is a property of the approach rather than a
   tuning problem, and a test pins the behaviour down rather than papering over it.
+- `graphics::Camera` is a plain owned value, like `Input` and `Time`, not a
+  component and not a singleton. It is view state: it says where the person
+  playing is looking, which is a property of the program rather than of any
+  entity. `Application` owns it and hands out references.
+- `RenderSystem` holds the camera by **const reference**. A render system that
+  could silently move the camera would look exactly like a game that pans on its
+  own, which is a very hard bug to find.
+- **Entities are never moved to follow the camera.** A `Transform::position` is a
+  world position and always will be. Faking a scrolling view by dragging entities
+  around would put colliders in screen space, and collision would then depend on
+  where the camera happens to be, which is not a question with a stable answer.
+- The world-to-screen conversion happens in **exactly one place**, the pure
+  function `toRenderTransform(transform, camera)`. The `Renderer` interface is
+  unchanged and the renderer still knows nothing about the world, so the unit
+  tests' recording fake did not have to grow any camera awareness.
+- `toRenderTransform` takes a **required** camera. An overload without it would
+  let a caller render a world position straight to the screen and get a subtly
+  wrong picture instead of a compile error.
+- **Zoom rides in `RenderTransform::scale`, not in `position`.** `position` is
+  absolute screen space and `scale` is local to the object's centre, so folding
+  the zoom into the position too would scale the translation and drag objects off
+  where they belong.
+- Zoom is **clamped** to a documented positive minimum by the setter, so
+  `screenToWorld()` can never divide by zero. Clamping rather than rejecting
+  follows the rule `Vec2` already sets: refuse to produce unrepresentable values,
+  never crash, never silently misbehave.
+- `CameraSystem` resolves its target **by tag, every frame**. Phase 3 documents
+  that an `Entity&` is invalidated by `EntityManager::update()`, so caching one
+  would be a latent dangling reference. Re-resolving costs a string comparison
+  and cannot dangle, and it lets a target be destroyed and respawned freely.
+- `getEntities()` yields `const Entity&`, so `CameraSystem` *cannot* write to its
+  target even by accident. A mutation that tries needs a `const_cast`, and the
+  tests catch it.
+- The camera **has no opinion about the keyboard**. Binding `Z`/`X` to zoom lives
+  in the demo in `main.cpp`, because that is a game decision, not an engine one.
+- **No camera culling.** Every renderable entity is submitted every frame. This
+  phase is about coordinate transformation, not performance.
 # Game-Engine

@@ -1,6 +1,7 @@
 #include "engine/Application.hpp"
 #include "engine/EngineConfig.hpp"
 #include "engine/input/SfmlKeyMap.hpp"
+#include "engine/math/Vec2.hpp"
 
 #include <cstdlib>
 
@@ -25,10 +26,20 @@ constexpr Color kWindowBackground = toColor(config::kBackgroundColorRed, config:
 
 Application::Application()
     : m_window(sf::VideoMode{config::kWindowWidth, config::kWindowHeight}, config::kWindowTitle), m_time{},
-      m_input{}, m_entityManager{}, m_systemManager{}, m_renderer{m_window}, m_renderSystem{m_renderer},
-      m_isRunning{true}
+      m_input{}, m_entityManager{}, m_systemManager{}, m_camera{}, m_renderer{m_window},
+      m_renderSystem{m_renderer, m_camera}, m_isRunning{true}
 {
     m_window.setFramerateLimit(config::kFramerateLimit);
+
+    // The camera's viewport is the window's size in pixels. Position and zoom
+    // keep their defaults, so a default camera looks at the world origin at 1:1.
+    //
+    // This is read once, at construction. The camera is deliberately not tied to
+    // the window object and there is no resize handling yet: a fixed viewport is
+    // enough for this phase, and wiring resize events in would mean deciding
+    // what a camera should do when the window changes shape, which is a design
+    // question rather than a plumbing one.
+    m_camera.setViewport(Vec2{static_cast<float>(config::kWindowWidth), static_cast<float>(config::kWindowHeight)});
 }
 
 int Application::run(const std::optional<std::size_t> maxFrameCount)

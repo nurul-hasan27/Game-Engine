@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/ecs/System.hpp"
+#include "engine/graphics/Camera.hpp"
 #include "engine/graphics/Renderer.hpp"
 
 namespace engine::ecs
@@ -28,15 +29,35 @@ namespace engine::systems
 /// here, and no error: "has no renderable component" is the normal way for an
 /// entity to exist.
 ///
+/// ### World in, screen out
+///
+/// This is the only system that knows a camera exists. It reads each entity's
+/// **world** position straight from its `Transform` and hands the renderer a
+/// **screen** position, with the conversion done by the pure function
+/// `graphics::toRenderTransform()`.
+///
+/// The system performs no world to screen arithmetic of its own and has no idea
+/// what a viewport is. It also does no physics, no gameplay and no culling, and
+/// it never writes to a `Transform`.
+///
+/// The camera is held by **const reference**: the camera is owned by
+/// `Application`, this system only reads it, and a render system that could
+/// silently move the camera would be a very hard bug to find. See
+/// [docs/camera.md](docs/camera.md).
+///
 /// It takes a `deltaSeconds` like any other system, and deliberately ignores it.
 /// Drawing does not integrate over time, and accepting the parameter rather than
 /// declaring a different signature keeps one uniform interface.
 class RenderSystem final : public engine::ecs::System
 {
 public:
-    /// The renderer is referenced, not owned: the window and its context belong
-    /// to `Application`, and a system must never own the thing it draws into.
-    explicit RenderSystem(graphics::Renderer& renderer) noexcept : m_renderer{&renderer} {}
+    /// Both the renderer and the camera are referenced, not owned: the window,
+    /// its context and the view onto the world all belong to `Application`, and a
+    /// system must never own the things it draws with.
+    RenderSystem(graphics::Renderer& renderer, const graphics::Camera& camera) noexcept
+        : m_renderer{&renderer}, m_camera{&camera}
+    {
+    }
 
     /// Takes `input` only because every system shares one signature. Drawing
     /// does not read the keyboard, and this is not a way for rendering to grow a
@@ -47,6 +68,7 @@ public:
 
 private:
     graphics::Renderer* m_renderer = nullptr;
+    const graphics::Camera* m_camera = nullptr;
 };
 
 } // namespace engine::systems

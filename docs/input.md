@@ -3,7 +3,8 @@
 This document covers keyboard input: the engine-level abstraction, the SFML
 boundary, the key state model, and `MovementSystem`. For the ECS see
 [ecs.md](ecs.md), for the frame clock [runtime.md](runtime.md), for drawing
-[rendering.md](rendering.md), and for collision [physics.md](physics.md).
+[rendering.md](rendering.md), for collision [physics.md](physics.md), and for
+the camera [camera.md](camera.md).
 
 ---
 
@@ -329,6 +330,11 @@ single-key directions travel exactly the same distance.
   direction. There is no `InputAction`, `InputMap` or rebinding: that is a
   gameplay and UI concern for a later phase. The engine-level physical key
   abstraction is the right scope here.
+- **`Key` is a short list, and grows one key at a time.** The enum holds the keys
+  the engine currently tracks, nothing more. Phase 9 added `Z` and `X` for the
+  camera demo's zoom controls, which is one enum entry and one line in the SFML
+  adapter each; the state machine itself needed no change, because it is entirely
+  data driven off `kKeyCount`. That is the designed growth path, not an oversight.
 - **No key chords or double taps.** No shift-walking, no ctrl-sprint. A chord is
   expressible as two `isKeyDown` calls, but there is no notion of a combination
   as a unit.
