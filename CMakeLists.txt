@@ -95,17 +95,20 @@ endif()
 # Targets
 # ---------------------------------------------------------------------------
 
-# The asset configuration parser, kept in its own library so that its isolation
-# is a property of the build rather than a promise in a comment.
+# The asset configuration parser and the opaque resource handles, kept in their
+# own library so that their isolation is a property of the build rather than a
+# promise in a comment.
 #
-# AssetFile.cpp is deliberately SFML-free and filesystem-free: it parses the
-# contents of a configuration string and never touches a file or a graphics
-# context. This target deliberately does not link SFML, so an
-# `#include <SFML/...>` added to the parser would fail to compile, and a symbol
+# These sources are deliberately SFML-free and filesystem-free: the parser reads
+# a configuration string, and the handles are pointers to a private
+# implementation. This target deliberately does not link SFML, so an
+# `#include <SFML/...>` added to any of them would fail to compile, and a symbol
 # from SFML would fail to link. Either way the boundary holds without anyone
-# having to remember it. The test suite below relies on exactly that.
+# having to remember it. The test suites below rely on exactly that.
 add_library(engine_assets STATIC
-            src/engine/assets/AssetFile.cpp)
+            src/engine/assets/AssetFile.cpp
+            src/engine/assets/Font.cpp
+            src/engine/assets/Texture.cpp)
 
 target_include_directories(engine_assets PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -237,4 +240,23 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_ASSET_FILE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/AssetFile.cpp")
     add_test(NAME assets.configuration_parser COMMAND asset_file_test)
     set_tests_properties(assets.configuration_parser PROPERTIES TIMEOUT 60)
+
+    # The opaque texture and font handles.
+    #
+    # Like the parser test above, this links engine_assets rather than engine, so
+    # the suite builds and links with no SFML anywhere on its link line. The four
+    # source paths are injected so it can also assert on the headers' own text,
+    # which is the only way to catch a public header quietly acquiring a graphics
+    # dependency: such a header would still compile and still pass every runtime
+    # check in the file.
+    add_executable(asset_handle_test tests/AssetHandleTest.cpp)
+    target_link_libraries(asset_handle_test PRIVATE engine_assets)
+    target_compile_options(asset_handle_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(asset_handle_test PRIVATE
+        ENGINE_TEXTURE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Texture.hpp"
+        ENGINE_FONT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Font.hpp"
+        ENGINE_TEXTURE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/Texture.cpp"
+        ENGINE_FONT_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/Font.cpp")
+    add_test(NAME assets.handles COMMAND asset_handle_test)
+    set_tests_properties(assets.handles PROPERTIES TIMEOUT 60)
 endif()
