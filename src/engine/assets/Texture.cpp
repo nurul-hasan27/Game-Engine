@@ -1,18 +1,15 @@
 #include "engine/assets/Texture.hpp"
 
+// The concrete graphics type for this handle. It is defined in a private header
+// rather than here, because the loader has to populate it and therefore needs to
+// see it too, and a private nested class can be defined out of line. This file
+// still includes no SFML header itself.
+#include "AssetHandleNative.hpp"
+
 #include <utility>
 
 namespace engine::assets
 {
-
-// The implementation is defined here and nowhere else, so the public header
-// needs neither the definition nor even a forward declaration of it. Keeping
-// this file free of SFML as well is not an accident to be maintained by hand:
-// the build links it into engine_assets, which has no SFML dependency at all, so
-// adding an SFML include below would fail to compile.
-struct Texture::Impl
-{
-};
 
 Texture::Texture() noexcept = default;
 

@@ -5,6 +5,13 @@
 namespace engine::assets
 {
 
+/// The concrete manager that loads assets through this graphics library.
+///
+/// Declared here only so a handle can name it as a friend. Its definition lives
+/// elsewhere, and nothing about it reaches this header, which stays includable
+/// with no SFML header in reach.
+class SfmlAssetManager;
+
 /// An opaque, loaded font resource.
 ///
 /// ### What this type is for
@@ -110,8 +117,14 @@ public:
     Font& operator=(const Font&) = delete;
 
 private:
-    /// The opaque implementation. Defined in the .cpp and never named here, so
-    /// its contents — including any graphics type it needs — stay private.
+    /// The concrete implementation populates a handle from the platform resource
+    /// it owns. Being the loader, and only the loader, is what keeps a handle
+    /// meaning "empty, or holding exactly what was loaded for it" instead of
+    /// "anything with a pointer to an implementation can reach in and set it".
+    friend class SfmlAssetManager;
+
+    /// The opaque implementation. Defined with the concrete graphics type in a
+    /// private header, and never named here, so its contents stay private.
     ///
     /// Not forward declared as `struct Impl;` separately, because a nested type
     /// declaration inside the class is the same declaration and is less to

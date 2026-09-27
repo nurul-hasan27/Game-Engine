@@ -603,16 +603,56 @@ void testImplementationsContainNoSfmlReferences()
         return;
     }
 
-    // The implementations are SFML-free too, and not by convention: they are
-    // compiled into engine_assets, which links no graphics library, so an SFML
-    // include here would fail to compile at all.
+    // Texture.cpp and Font.cpp still include no SFML header of their own. A
+    // handle needs its implementation type complete in order to destroy the
+    // pointer, and the platform type now lives in that implementation, so the
+    // file has to see a graphics type somehow. It gets there through one private
+    // header rather than by naming a graphics type itself, which keeps the number
+    // of files that name one at exactly one and keeps this pair readable without
+    // a graphics library in the line of sight.
     const std::vector<std::string> forbidden{"<SFML", "sf::", "SFML/"};
 
     CHECK_FALSE(containsAny(sources.textureSource, forbidden));
     CHECK_FALSE(containsAny(sources.fontSource, forbidden));
 }
 
-void testImplementationsAreSelfContained()
+void testPlatformTypesLiveInExactlyOnePrivateHeader()
+{
+    // The single place in the asset system where a concrete graphics type is
+    // named, and the place the loader's include path picks it up from. The fact
+    // that it is private is checked by the build rather than here: the library
+    // lists that directory as a PRIVATE include path, and the SFML-free library
+    // does not list it at all, so nothing above this line can reach it.
+    const std::string native = readSource(ENGINE_HANDLE_NATIVE_HEADER);
+
+    CHECK(!native.empty());
+    if (native.empty())
+    {
+        return;
+    }
+
+    // Both implementation types are defined here, each holding exactly the one
+    // platform resource and nothing else. A second member would be a name, a
+    // path or a manager pointer, which is precisely what a handle must not carry.
+    CHECK(containsAll(native, {"struct Texture::Impl", "sf::Texture native", "struct Font::Impl", "sf::Font native"}));
+    CHECK(countOccurrences(native, "sf::Texture native") == 1U);
+    CHECK(countOccurrences(native, "sf::Font native") == 1U);
+
+    // And nothing else is stored. A cache index, the source path or the asset
+    // name would all fit here without changing the handle's size, so size alone
+    // would not catch them; the rule is that an implementation holds a resource
+    // and nothing about where it came from.
+    const std::vector<std::string> forbidden{"std::string", "std::size_t ", "std::path", "std::filesystem", "m_",
+                                             "AssetManager", "AssetEntry"};
+
+    CHECK_FALSE(containsAny(native, forbidden));
+
+    // And it names graphics types, which is the whole reason it is private and
+    // the whole reason the public headers do not.
+    CHECK(containsAny(native, {"<SFML", "sf::"}));
+}
+
+void testHandleImplementationsGetTheirImplementationFromThePrivateHeader()
 {
     const Sources sources = loadSources();
 
@@ -623,17 +663,36 @@ void testImplementationsAreSelfContained()
         return;
     }
 
-    // Each .cpp must include only its own header, so there is no way for one to
-    // start relying on something the other happened to include first.
-    CHECK(containsAll(sources.textureSource, {"#include \"engine/assets/Texture.hpp\""}));
-    CHECK(containsAll(sources.fontSource, {"#include \"engine/assets/Font.hpp\""}));
+    // Each .cpp includes its own public header and the private native header, so
+    // neither can start relying on something the other happened to include first.
+    CHECK(containsAll(sources.textureSource,
+                      {"#include \"engine/assets/Texture.hpp\"", "#include \"AssetHandleNative.hpp\""}));
+    CHECK(containsAll(sources.fontSource, {"#include \"engine/assets/Font.hpp\"", "#include \"AssetHandleNative.hpp\""}));
 
-    // And the implementation type must be defined in the .cpp. It cannot be
-    // forward declared in the header, so this is the only place it can live.
-    // Finding it here is how the suite confirms the pimpl is real rather than
-    // the implementation quietly inlined back into the public class.
-    CHECK(containsAll(sources.textureSource, {"struct Texture::Impl"}));
-    CHECK(containsAll(sources.fontSource, {"struct Font::Impl"}));
+    // Neither defines its own implementation any more. If one did, the two would
+    // be different definitions of the same type and the program would not link;
+    // finding them here means the private header is really the single source.
+    CHECK_FALSE(containsAny(sources.textureSource, {"struct Texture::Impl"}));
+    CHECK_FALSE(containsAny(sources.fontSource, {"struct Font::Impl"}));
+}
+
+void testOnlyTheLoaderMayPopulateAHandle()
+{
+    const Sources sources = loadSources();
+
+    CHECK(!sources.textureHeader.empty());
+    CHECK(!sources.fontHeader.empty());
+    if (sources.textureHeader.empty() || sources.fontHeader.empty())
+    {
+        return;
+    }
+
+    // A handle is either empty or holding exactly what the loader put there. That
+    // is enforced by naming the concrete manager a friend and nobody else, so a
+    // second way in would show up here as an extra friend or a public setter. The
+    // friend needs no graphics type, which is why the header can stay SFML-free.
+    CHECK(containsAll(sources.textureHeader, {"class SfmlAssetManager;", "friend class SfmlAssetManager;"}));
+    CHECK(containsAll(sources.fontHeader, {"class SfmlAssetManager;", "friend class SfmlAssetManager;"}));
 }
 
 void testDestructorsAreDefinedOutOfLine()
@@ -681,7 +740,10 @@ int main()
         {"public headers include nothing but memory", &testPublicHeadersIncludeNothingButMemory},
         {"public headers declare no other data members", &testPublicHeadersDeclareNoOtherDataMembers},
         {"implementations contain no sfml references", &testImplementationsContainNoSfmlReferences},
-        {"implementations are self contained", &testImplementationsAreSelfContained},
+        {"platform types live in exactly one private header", &testPlatformTypesLiveInExactlyOnePrivateHeader},
+        {"handle implementations get their implementation from the private header",
+         &testHandleImplementationsGetTheirImplementationFromThePrivateHeader},
+        {"only the loader may populate a handle", &testOnlyTheLoaderMayPopulateAHandle},
         {"destructors are defined out of line", &testDestructorsAreDefinedOutOfLine},
     };
 

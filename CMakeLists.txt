@@ -95,20 +95,12 @@ endif()
 # Targets
 # ---------------------------------------------------------------------------
 
-# The asset configuration parser and the opaque resource handles, kept in their
-# own library so that their isolation is a property of the build rather than a
-# promise in a comment.
-#
-# These sources are deliberately SFML-free and filesystem-free: the parser reads
-# a configuration string, and the handles are pointers to a private
-# implementation. This target deliberately does not link SFML, so an
-# `#include <SFML/...>` added to any of them would fail to compile, and a symbol
-# from SFML would fail to link. Either way the boundary holds without anyone
-# having to remember it. The test suites below rely on exactly that.
+# The asset configuration parser. Deliberately SFML-free and filesystem-free: it
+# reads a configuration string and never touches a file or a graphics context.
+# This target does not link SFML, so an `#include <SFML/...>` in the parser
+# would fail to compile. assets.configuration_parser relies on exactly that.
 add_library(engine_assets STATIC
-            src/engine/assets/AssetFile.cpp
-            src/engine/assets/Font.cpp
-            src/engine/assets/Texture.cpp)
+            src/engine/assets/AssetFile.cpp)
 
 target_include_directories(engine_assets PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -116,6 +108,37 @@ target_include_directories(engine_assets PUBLIC
 
 target_compile_features(engine_assets PUBLIC cxx_std_17)
 target_compile_options(engine_assets PRIVATE ${ENGINE_WARNING_FLAGS})
+
+# The SFML-backed half of the asset system: the concrete resource handles and the
+# manager that loads them.
+#
+# It is a separate library from the parser because a resource handle has to hold
+# the platform resource to be worth anything, and the platform resource needs
+# this graphics library. The public headers stay free of it either way, so
+# splitting here costs nothing above this line and buys two things: the parser
+# keeps a genuine SFML-free link line, and the boundary is checked by the build
+# rather than by intention.
+#
+# The private include directory is where AssetHandleNative.hpp lives, holding the
+# definitions of the handles' private implementations. Putting it on a PRIVATE
+# path is what stops it becoming a public SFML surface, and it is deliberately not
+# on engine_assets' path at all.
+add_library(engine_assets_sfml STATIC
+            src/engine/assets/Font.cpp
+            src/engine/assets/SfmlAssetManager.cpp
+            src/engine/assets/Texture.cpp)
+
+target_include_directories(engine_assets_sfml PUBLIC
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+                           $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>)
+
+target_include_directories(engine_assets_sfml PRIVATE
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/engine/assets/internal>)
+
+target_link_libraries(engine_assets_sfml PUBLIC sfml-graphics sfml-window)
+target_link_libraries(engine_assets_sfml PUBLIC engine_assets)
+target_compile_features(engine_assets_sfml PUBLIC cxx_std_17)
+target_compile_options(engine_assets_sfml PRIVATE ${ENGINE_WARNING_FLAGS})
 
 # The reusable engine library. It deliberately contains no main() so that the
 # examples and the tests can each provide their own entry point.
@@ -138,7 +161,7 @@ target_include_directories(engine PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
                            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>)
 
-target_link_libraries(engine PUBLIC sfml-graphics sfml-window engine_assets)
+target_link_libraries(engine PUBLIC sfml-graphics sfml-window engine_assets engine_assets_sfml)
 target_compile_features(engine PUBLIC cxx_std_17)
 target_compile_options(engine PRIVATE ${ENGINE_WARNING_FLAGS})
 
@@ -243,35 +266,53 @@ if(ENGINE_BUILD_TESTS)
 
     # The opaque texture and font handles.
     #
-    # Like the parser test above, this links engine_assets rather than engine, so
-    # the suite builds and links with no SFML anywhere on its link line. The four
-    # source paths are injected so it can also assert on the headers' own text,
-    # which is the only way to catch a public header quietly acquiring a graphics
-    # dependency: such a header would still compile and still pass every runtime
-    # check in the file.
+    # Linked against engine_assets_sfml rather than engine_assets, because a
+    # handle's implementation is where the concrete graphics type now lives. The
+    # public headers it is testing are still free of SFML, and the suite asserts
+    # that from the header text; the library it links is a separate question, and
+    # the answer there is deliberately yes.
     add_executable(asset_handle_test tests/AssetHandleTest.cpp)
-    target_link_libraries(asset_handle_test PRIVATE engine_assets)
+    target_link_libraries(asset_handle_test PRIVATE engine_assets_sfml)
     target_compile_options(asset_handle_test PRIVATE ${ENGINE_WARNING_FLAGS})
     target_compile_definitions(asset_handle_test PRIVATE
         ENGINE_TEXTURE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Texture.hpp"
         ENGINE_FONT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Font.hpp"
         ENGINE_TEXTURE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/Texture.cpp"
-        ENGINE_FONT_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/Font.cpp")
+        ENGINE_FONT_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/Font.cpp"
+        ENGINE_HANDLE_NATIVE_HEADER="${PROJECT_SOURCE_DIR}/src/engine/assets/internal/AssetHandleNative.hpp")
     add_test(NAME assets.handles COMMAND asset_handle_test)
     set_tests_properties(assets.handles PROPERTIES TIMEOUT 60)
 
     # The asset manager interface.
     #
-    # Header-only, so there is no new source to compile, and linked against
-    # engine_assets like the two suites above so it too builds with no SFML on the
-    # link line. The header's own text is injected so the suite can assert the
-    # interface stays SFML-free and stays read-only, neither of which any runtime
-    # behaviour could reveal.
+    # The interface itself is header-only and SFML-free, which is what the suite
+    # asserts. It links the SFML-backed library only because its test double
+    # constructs real handles, whose implementation type now holds a platform
+    # resource. The header path is injected so the suite can assert the interface
+    # stays SFML-free and stays read-only, neither of which any runtime behaviour
+    # could reveal.
     add_executable(asset_manager_test tests/AssetManagerTest.cpp)
-    target_link_libraries(asset_manager_test PRIVATE engine_assets)
+    target_link_libraries(asset_manager_test PRIVATE engine_assets_sfml)
     target_compile_options(asset_manager_test PRIVATE ${ENGINE_WARNING_FLAGS})
     target_compile_definitions(asset_manager_test PRIVATE
         ENGINE_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/AssetManager.hpp")
     add_test(NAME assets.manager_interface COMMAND asset_manager_test)
     set_tests_properties(assets.manager_interface PROPERTIES TIMEOUT 60)
+
+    # The concrete SFML asset manager: loading, caching and path resolution.
+    #
+    # This is the one asset suite that genuinely needs a graphics library, because
+    # loading an image does. The library directory is injected so the suite can
+    # exercise the committed asset files without depending on the working
+    # directory; every configuration it loads is written into a temporary
+    # directory, so nothing on disk is left behind and the checked-in tree is
+    # never written to.
+    add_executable(asset_loader_test tests/AssetLoaderTest.cpp)
+    target_link_libraries(asset_loader_test PRIVATE engine_assets_sfml)
+    target_compile_options(asset_loader_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(asset_loader_test PRIVATE
+        ENGINE_ASSET_LIBRARY_DIR="${PROJECT_SOURCE_DIR}/assets/library"
+        ENGINE_SFML_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/SfmlAssetManager.hpp")
+    add_test(NAME assets.loading COMMAND asset_loader_test)
+    set_tests_properties(assets.loading PROPERTIES TIMEOUT 120)
 endif()
