@@ -91,13 +91,29 @@ Three files are palette-indexed rather than RGBA:
 | `mario/Flagpole.png` | 4 | 75x528 |
 | `mario/question.png` | 4 | 360x360 |
 
-These are recorded here because the future asset loader is expected to need
-special handling for palette-indexed PNGs: an `sf::Texture` created directly
-from an indexed PNG does not always sample its pixels correctly, and a
-`copyToImage()` step is generally required.
+These are recorded here because they are the one place in this library that could
+plausibly have needed special handling, and it is worth knowing they were checked.
 
-**That handling is not implemented.** This directory currently contains data
-only. No engine code reads, loads, or renders any file in this library yet.
+**They do not need any.** An earlier version of this file claimed that a
+`copyToImage()` step was generally required for a palette-indexed PNG, and that
+was wrong. SFML 2.6.2 decodes all three correctly through
+`sf::Texture::loadFromFile`, because the image loader underneath it (stb_image) is
+asked for four channels and resolves the palette itself.
+
+This was verified rather than assumed. Each file was decoded independently to
+RGBA and compared pixel by pixel against the texture the loader produces, at
+several coordinates including partly transparent and fully transparent pixels. All
+three matched exactly. For example `mario/question.png` at (180,180) is
+`(227,53,0,255)` from both, which is a decoder that read the palette correctly
+rather than one that mistook palette indices for colour channels.
+
+The loader therefore loads these files the same way as every other image. The
+pixel comparison is kept as a test (`assets.loading`), so a future graphics
+library that changed this behaviour would fail there rather than being noticed
+as wrong colours on screen.
+
+**Nothing in this directory is loaded, read or rendered by the engine yet.** It
+remains data.
 
 ## Font inventory
 
