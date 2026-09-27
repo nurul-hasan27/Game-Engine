@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/AssetManager.hpp"
 #include "engine/ecs/System.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/Renderer.hpp"
@@ -51,11 +52,29 @@ namespace engine::systems
 class RenderSystem final : public engine::ecs::System
 {
 public:
-    /// Both the renderer and the camera are referenced, not owned: the window,
-    /// its context and the view onto the world all belong to `Application`, and a
-    /// system must never own the things it draws with.
+    /// The renderer, the camera and the assets are all referenced, not owned: the
+    /// window, its context, the view onto the world and every loaded image belong
+    /// to `Application` and the `AssetManager`, and a system must never own the
+    /// things it draws with.
+    ///
+    /// The asset manager is only read, to resolve a name into a handle. The system
+    /// does not load, cache or keep one.
+    RenderSystem(graphics::Renderer& renderer, const graphics::Camera& camera,
+                 const assets::AssetManager& assets) noexcept
+        : m_renderer{&renderer}, m_camera{&camera}, m_assets{&assets}
+    {
+    }
+
+    /// No assets configured.
+    ///
+    /// A temporary bridge for callers that have no `AssetManager` to hand over
+    /// yet. The rectangle query is unaffected; if any entity carries a
+    /// `components::Texture` the frame fails with a clear error rather than
+    /// quietly drawing nothing, because "there is no asset manager" and "that
+    /// texture is not declared" are different problems and should not look the
+    /// same. This overload is removed once `Application` owns an `AssetManager`.
     RenderSystem(graphics::Renderer& renderer, const graphics::Camera& camera) noexcept
-        : m_renderer{&renderer}, m_camera{&camera}
+        : m_renderer{&renderer}, m_camera{&camera}, m_assets{nullptr}
     {
     }
 
@@ -69,6 +88,10 @@ public:
 private:
     graphics::Renderer* m_renderer = nullptr;
     const graphics::Camera* m_camera = nullptr;
+
+    /// Null only when constructed through the no-assets overload above. Never
+    /// dereferenced without checking, and checked by the texture query before use.
+    const assets::AssetManager* m_assets = nullptr;
 };
 
 } // namespace engine::systems

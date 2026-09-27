@@ -37,6 +37,7 @@ public:
     void beginFrame() override;
     void clear(const Color& color) override;
     void drawRectangle(const Vec2& size, const Color& color, const RenderTransform& placement) override;
+    void drawTexture(const assets::Texture& texture, const RenderTransform& placement) override;
     void endFrame() override;
 
     [[nodiscard]] std::uint64_t frameCount() const noexcept override { return m_frameCount; }

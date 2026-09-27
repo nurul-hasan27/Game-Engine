@@ -1,6 +1,9 @@
 #include "engine/Application.hpp"
 #include "engine/Color.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/SfmlAssetManager.hpp"
 #include "engine/components/Rectangle.hpp"
+#include "engine/components/Texture.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
 #include "engine/graphics/Camera.hpp"
@@ -19,9 +22,13 @@
 #include <SFML/Graphics/Texture.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <map>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -44,6 +51,16 @@ struct DrawCall
     engine::graphics::RenderTransform placement;
 };
 
+/// A recorded texture draw. Records the handle by address rather than by value,
+/// because a handle is non-copyable by design and because identity is the thing
+/// worth asserting: a system must submit the asset the name resolved to, not a
+/// copy of it.
+struct TextureDrawCall
+{
+    const engine::assets::Texture* texture = nullptr;
+    engine::graphics::RenderTransform placement;
+};
+
 class RecordingRenderer final : public engine::graphics::Renderer
 {
 public:
@@ -51,6 +68,9 @@ public:
     {
         ++m_beginFrames;
         m_cleared = false;
+        // Order is recorded across a whole frame, because the question of which
+        // query submits first is exactly what a texture test needs to see.
+        m_order.clear();
     }
 
     void clear(const engine::Color& color) override
@@ -63,6 +83,14 @@ public:
                        const engine::graphics::RenderTransform& placement) override
     {
         m_draws.push_back(DrawCall{size, color, placement});
+        m_order.emplace_back("rectangle");
+    }
+
+    void drawTexture(const engine::assets::Texture& texture,
+                     const engine::graphics::RenderTransform& placement) override
+    {
+        m_textureDraws.push_back(TextureDrawCall{&texture, placement});
+        m_order.emplace_back("texture");
     }
 
     void endFrame() override { ++m_endFrames; }
@@ -70,6 +98,8 @@ public:
     [[nodiscard]] std::uint64_t frameCount() const noexcept override { return m_endFrames; }
 
     [[nodiscard]] const std::vector<DrawCall>& draws() const noexcept { return m_draws; }
+    [[nodiscard]] const std::vector<TextureDrawCall>& textureDraws() const noexcept { return m_textureDraws; }
+    [[nodiscard]] const std::vector<std::string>& order() const noexcept { return m_order; }
     [[nodiscard]] bool cleared() const noexcept { return m_cleared; }
     [[nodiscard]] const engine::Color& clearColor() const noexcept { return m_clearColor; }
     [[nodiscard]] std::size_t beginFrameCount() const noexcept { return m_beginFrames; }
@@ -78,6 +108,8 @@ public:
     void reset()
     {
         m_draws.clear();
+        m_textureDraws.clear();
+        m_order.clear();
         m_cleared = false;
         m_beginFrames = 0;
         m_endFrames = 0;
@@ -85,6 +117,8 @@ public:
 
 private:
     std::vector<DrawCall> m_draws;
+    std::vector<TextureDrawCall> m_textureDraws;
+    std::vector<std::string> m_order;
     engine::Color m_clearColor{};
     std::size_t m_beginFrames = 0;
     std::size_t m_endFrames = 0;
@@ -109,6 +143,9 @@ public:
     [[nodiscard]] const char* name() const override { return "DriftSystem"; }
 };
 
+namespace assets = engine::assets;
+namespace components = engine::components;
+namespace graphics = engine::graphics;
 using engine::Color;
 using engine::Vec2;
 using engine::components::Rectangle;
@@ -117,6 +154,7 @@ using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::graphics::Camera;
 using engine::graphics::RenderTransform;
+using engine::input::Input;
 using engine::graphics::Renderer;
 using engine::systems::RenderSystem;
 
@@ -963,6 +1001,690 @@ void testApplicationSurvivesNoRenderableEntities()
     CHECK(application.renderer().frameCount() == 3);
 }
 
+// ---------------------------------------------------------------------------
+// Step 7: textures.
+//
+// Everything above tested rectangles. These groups add a second draw and a second
+// query, under one standing rule: nothing that already worked may move. The
+// rectangle query is unchanged, the world-to-screen conversion is shared, and the
+// 33 groups above were not edited to accommodate any of this.
+// ---------------------------------------------------------------------------
+
+/// A test double asset manager.
+///
+/// Hands back stable, empty handles and records which names were asked for. Empty
+/// is sufficient here because the recording renderer never looks inside a handle,
+/// only records its address; the groups that need real pixels use a real
+/// `SfmlAssetManager` and a real window instead.
+class FakeAssetManager final : public assets::AssetManager
+{
+public:
+    const assets::Texture& texture(const std::string_view name) const override
+    {
+        m_requested.emplace_back(name);
+
+        const auto found = m_textures.find(std::string{name});
+        if (found == m_textures.end())
+        {
+            throw assets::AssetNotFoundError{"no texture named '" + std::string{name} + "'"};
+        }
+
+        return found->second;
+    }
+
+    const assets::Font& font(const std::string_view name) const override
+    {
+        const std::string key{name};
+        const auto found = m_fonts.find(key);
+        if (found == m_fonts.end())
+        {
+            throw assets::AssetNotFoundError{"no font named '" + key + "'"};
+        }
+
+        return found->second;
+    }
+
+    /// Pre-declares a name, so `texture(name)` will resolve.
+    void declare(const std::string& name) { m_textures.emplace(name, assets::Texture{}); }
+
+    [[nodiscard]] const std::vector<std::string>& requested() const noexcept { return m_requested; }
+
+private:
+    mutable std::map<std::string, assets::Texture> m_textures;
+    mutable std::map<std::string, assets::Font> m_fonts;
+    mutable std::vector<std::string> m_requested;
+};
+
+/// A textured entity, wired the way a game would wire one: a name in the
+/// component, everything else in the transform.
+Entity& addTexturedEntity(EntityManager& manager, const std::string& name, const Vec2& position,
+                          const Vec2& scale = Vec2{1.0F, 1.0F})
+{
+    Entity& entity = manager.addEntity(name);
+    entity.addComponent<Transform>(Transform{position, Vec2{0.0F, 0.0F}, scale, 0.0F});
+    entity.addComponent<components::Texture>(components::Texture{name});
+    return entity;
+}
+
+/// The real, shipped configuration, for the groups that need real pixels.
+[[nodiscard]] assets::SfmlAssetManager shippedAssets()
+{
+    return assets::SfmlAssetManager{std::filesystem::path{ENGINE_ASSET_CONFIG}};
+}
+
+void testTextureComponentStoresAnAssetName()
+{
+    components::Texture texture;
+
+    // The one semantic field, and it is a name, so it is readable data.
+    CHECK(texture.assetName.empty());
+
+    texture.assetName = "mario_ground";
+    CHECK(texture.assetName == "mario_ground");
+
+    // A name is plain data, so it copies and compares like every other component.
+    const components::Texture copy = texture;
+    CHECK(copy.assetName == texture.assetName);
+}
+
+void testTextureComponentIsPlainDataWithNoNativeState()
+{
+    // The point of storing a name: the component is ordinary data, so the ECS
+    // never touches a graphics type and an entity can be described in a file.
+    static_assert(std::is_aggregate_v<components::Texture>, "Texture must remain an aggregate");
+    static_assert(std::is_default_constructible_v<components::Texture>, "Texture must be default constructible");
+    static_assert(std::is_copy_constructible_v<components::Texture>, "a name is copyable, unlike a handle");
+    static_assert(std::is_copy_assignable_v<components::Texture>, "a name is copy assignable, unlike a handle");
+
+    // One field, and it is a string: not a handle, not an index, not a pointer.
+    static_assert(std::is_same_v<decltype(components::Texture{}.assetName), std::string>,
+                  "the component must hold a name and nothing else");
+
+    // A std::string member is deliberately not trivially copyable. That is the
+    // price of being describable in a level file, and it is the only component
+    // that pays it, because it is the only one holding an owned value.
+    static_assert(!std::is_trivially_copyable_v<components::Texture>,
+                  "a std::string member is not trivially copyable, by design");
+
+    // It is emphatically not a handle: a handle is neither copyable nor
+    // assignable, and a component that was one would stop being data.
+    static_assert(!std::is_same_v<components::Texture, assets::Texture>, "the component must not be a handle");
+
+    CHECK(true);
+}
+
+void testRendererInterfaceExposesDrawTexture()
+{
+    // The exact signature the rest of the engine is written against: a const
+    // handle and a placement, both const, and no size parameter, because the size
+    // belongs to the image.
+    using DrawTexture = void (graphics::Renderer::*)(const assets::Texture&, const graphics::RenderTransform&);
+    static_assert(std::is_same_v<decltype(&graphics::Renderer::drawTexture), DrawTexture>,
+                  "drawTexture must take a const handle and a placement");
+    static_assert(std::is_abstract_v<graphics::Renderer>, "Renderer must stay abstract");
+
+    // Additive: every pre-existing member is byte-for-byte what it was.
+    using DrawRectangle = void (graphics::Renderer::*)(const Vec2&, const Color&, const graphics::RenderTransform&);
+    static_assert(std::is_same_v<decltype(&graphics::Renderer::drawRectangle), DrawRectangle>,
+                  "drawRectangle must be unchanged");
+    static_assert(std::is_same_v<decltype(&graphics::Renderer::beginFrame), void (graphics::Renderer::*)()>,
+                  "beginFrame must be unchanged");
+    static_assert(std::is_same_v<decltype(&graphics::Renderer::endFrame), void (graphics::Renderer::*)()>,
+                  "endFrame must be unchanged");
+    static_assert(std::is_same_v<decltype(&graphics::Renderer::clear), void (graphics::Renderer::*)(const Color&)>,
+                  "clear must be unchanged");
+    static_assert(std::is_same_v<decltype(&graphics::Renderer::frameCount),
+                                 std::uint64_t (graphics::Renderer::*)() const noexcept>,
+                  "frameCount must be unchanged");
+    static_assert(std::is_destructible_v<graphics::Renderer>, "Renderer must stay destructible");
+
+    CHECK(true);
+}
+
+void testARendererWithoutSfmlStillSatisfiesTheInterface()
+{
+    // Nothing in the interface needs a graphics library, so a test double can
+    // implement the whole thing. If that ever stops being true, the fake used
+    // throughout this file stops compiling, which is the point.
+    struct PlainRenderer final : graphics::Renderer
+    {
+        void beginFrame() override {}
+        void clear(const Color&) override {}
+        void drawRectangle(const Vec2&, const Color&, const graphics::RenderTransform&) override {}
+        void drawTexture(const assets::Texture&, const graphics::RenderTransform&) override {}
+        void endFrame() override {}
+        [[nodiscard]] std::uint64_t frameCount() const noexcept override { return 0; }
+    };
+
+    static_assert(std::is_final_v<graphics::SfmlRenderer>, "SfmlRenderer must stay final");
+    static_assert(std::is_base_of_v<graphics::Renderer, PlainRenderer>, "a non-SFML renderer must satisfy Renderer");
+    static_assert(!std::is_copy_constructible_v<graphics::Renderer>, "a renderer must not be copyable");
+
+    CHECK(true);
+}
+
+// --- RenderSystem: the second query -----------------------------------------
+
+void testRenderSystemTextureQueryDrawsTextures()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    addTexturedEntity(manager, "mario_ground", Vec2{100.0F, 50.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    // The new query drew, and the rectangle query did not.
+    CHECK(renderer.textureDraws().size() == 1U);
+    CHECK(renderer.draws().empty());
+}
+
+void testRenderSystemRequestsTheNameTheComponentCarries()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    addTexturedEntity(manager, "mario_ground", Vec2{10.0F, 10.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    // The name the component holds, not one the system invented.
+    CHECK(assets.requested().size() == 1U);
+    if (!assets.requested().empty())
+    {
+        CHECK(assets.requested().front() == "mario_ground");
+    }
+}
+
+void testRenderSystemSubmitsTheManagersOwnHandle()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    addTexturedEntity(manager, "mario_ground", Vec2{10.0F, 10.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    // Identity, not a copy: the draw references the very handle the manager owns,
+    // which is what makes loading once worth anything.
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (!renderer.textureDraws().empty())
+    {
+        CHECK(renderer.textureDraws().front().texture == &assets.texture("mario_ground"));
+    }
+}
+
+void testTransformPositionMovesTheTexture()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    addTexturedEntity(manager, "mario_ground", Vec2{300.0F, 200.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    // The same conversion the rectangle query uses.
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (!renderer.textureDraws().empty())
+    {
+        const RenderTransform placement = renderer.textureDraws().front().placement;
+        CHECK_NEAR_VEC(placement.position, Vec2(300.0F, 200.0F));
+    }
+}
+
+void testTransformScaleScalesTheTexture()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    // The same shape of change a rectangle sees.
+    addTexturedEntity(manager, "mario_ground", Vec2{0.0F, 0.0F}, Vec2{3.0F, 0.5F});
+    renderSystem.update(manager, input, 0.0F);
+
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (!renderer.textureDraws().empty())
+    {
+        CHECK_NEAR_VEC(renderer.textureDraws().front().placement.scale, Vec2(3.0F, 0.5F));
+    }
+}
+
+void testCameraZoomScalesTheTextureWithoutMovingIt()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    Camera camera;
+    camera.setZoom(2.0F);
+
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    // The SAME Transform on a rectangle and on a texture. The camera has to reach
+    // both identically, and comparing the two placements directly is a stronger
+    // statement than re-deriving the expected numbers here.
+    //
+    // Worth being precise about what zoom does. It multiplies the object's own
+    // scale, and it also scales a world position's offset from the camera's
+    // centre, because that is what looking more closely means: a point twice as
+    // far from the centre appears twice as far out. What it must NOT do is scale
+    // the object's own size independently of the camera, which is why the
+    // rectangle comparison matters.
+    Entity& rectangle = manager.addEntity("rectangle");
+    rectangle.addComponent<Transform>(Transform{Vec2{150.0F, 80.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    rectangle.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
+    addTexturedEntity(manager, "mario_ground", Vec2{150.0F, 80.0F});
+
+    renderSystem.update(manager, input, 0.0F);
+
+    CHECK(renderer.textureDraws().size() == 1U);
+    CHECK(renderer.draws().size() == 1U);
+    if (!renderer.textureDraws().empty() && !renderer.draws().empty())
+    {
+        const RenderTransform texturePlacement = renderer.textureDraws().front().placement;
+        const RenderTransform rectanglePlacement = renderer.draws().front().placement;
+
+        // Zoom multiplies the object's scale.
+        CHECK_NEAR_VEC(texturePlacement.scale, Vec2(2.0F, 2.0F));
+
+        // And the camera places the two identically, in every field.
+        CHECK_NEAR_VEC(texturePlacement.position, rectanglePlacement.position);
+        CHECK_NEAR_VEC(texturePlacement.scale, rectanglePlacement.scale);
+        CHECK_NEAR(texturePlacement.rotationDegrees, rectanglePlacement.rotationDegrees);
+    }
+}
+
+void testMissingAssetNamePropagates()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    // Nothing declared, so the lookup fails.
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    addTexturedEntity(manager, "not_declared", Vec2{0.0F, 0.0F});
+
+    bool threw = false;
+    try
+    {
+        renderSystem.update(manager, input, 0.0F);
+    }
+    catch (const assets::AssetNotFoundError&)
+    {
+        threw = true;
+    }
+
+    // Loudly. An entity that quietly draws nothing is a bug that surfaces much
+    // later as a missing sprite with nothing pointing at the cause.
+    CHECK(threw);
+    CHECK(renderer.textureDraws().empty());
+}
+
+void testRenderSystemWithoutAnAssetManagerReportsIt()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    [[maybe_unused]] Input input;
+
+    // The no-assets constructor, used until Application owns an AssetManager.
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera};
+    renderer.beginFrame();
+
+    addTexturedEntity(manager, "mario_ground", Vec2{0.0F, 0.0F});
+
+    bool threw = false;
+    try
+    {
+        renderSystem.update(manager, input, 0.0F);
+    }
+    catch (const std::logic_error& error)
+    {
+        threw = true;
+        // The message must name the asset, or "there is no manager" and "that
+        // texture is not declared" look identical to whoever reads it.
+        CHECK(std::string{error.what()}.find("mario_ground") != std::string::npos);
+    }
+
+    CHECK(threw);
+}
+
+void testRectangleQueryIsUnaffectedByTextures()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    // Only a rectangle, exactly as before this step existed.
+    Entity& rectangle = manager.addEntity("rectangle");
+    rectangle.addComponent<Transform>(Transform{Vec2{100.0F, 50.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    rectangle.addComponent<Rectangle>(Rectangle{Vec2{40.0F, 20.0F}, Color{1.0F, 0.0F, 0.0F, 1.0F}});
+    renderSystem.update(manager, input, 0.0F);
+
+    CHECK(renderer.draws().size() == 1U);
+    CHECK(renderer.textureDraws().empty());
+    if (!renderer.draws().empty())
+    {
+        CHECK_NEAR_VEC(renderer.draws().front().size, Vec2(40.0F, 20.0F));
+        CHECK_NEAR_VEC(renderer.draws().front().placement.position, Vec2(100.0F, 50.0F));
+    }
+}
+
+void testTexturesAreDrawnAfterRectangles()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    // The texture entity is created FIRST, so plain iteration order would draw it
+    // first. The documented rule is that ordering follows the query, not the
+    // entity, and this is the group that says so.
+    addTexturedEntity(manager, "mario_ground", Vec2{10.0F, 10.0F});
+
+    Entity& rectangle = manager.addEntity("rectangle");
+    rectangle.addComponent<Transform>(Transform{Vec2{100.0F, 50.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    rectangle.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
+
+    renderSystem.update(manager, input, 0.0F);
+
+    // Rectangle first, then texture, whatever the entity order was.
+    CHECK(renderer.order().size() == 2U);
+    if (renderer.order().size() == 2U)
+    {
+        CHECK(renderer.order()[0] == "rectangle");
+        CHECK(renderer.order()[1] == "texture");
+    }
+}
+
+void testAnEntityWithBothComponentsDrawsBothRectangleFirst()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    // Carrying both is not a special case: the entity qualifies for both queries,
+    // and the ordering rule is what decides it.
+    Entity& both = manager.addEntity("mario_ground");
+    both.addComponent<Transform>(Transform{Vec2{50.0F, 50.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    both.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
+    both.addComponent<components::Texture>(components::Texture{"mario_ground"});
+
+    renderSystem.update(manager, input, 0.0F);
+
+    CHECK(renderer.order().size() == 2U);
+    CHECK(renderer.draws().size() == 1U);
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (renderer.order().size() == 2U)
+    {
+        CHECK(renderer.order()[0] == "rectangle");
+        CHECK(renderer.order()[1] == "texture");
+    }
+}
+
+void testRenderSystemDoesNotWriteToTheTextureTransform()
+{
+    EntityManager manager;
+    RecordingRenderer renderer;
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    [[maybe_unused]] Input input;
+
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    renderer.beginFrame();
+
+    const Entity& entity = addTexturedEntity(manager, "mario_ground", Vec2{100.0F, 50.0F});
+    const Transform before = entity.getComponent<Transform>();
+
+    renderSystem.update(manager, input, 0.0F);
+
+    // Drawing reads the world and never writes it, so a render pass cannot move
+    // anything in the simulation.
+    const Transform after = entity.getComponent<Transform>();
+    CHECK_NEAR_VEC(after.position, before.position);
+    CHECK_NEAR_VEC(after.velocity, before.velocity);
+    CHECK_NEAR_VEC(after.scale, before.scale);
+    CHECK_NEAR(after.angle, before.angle);
+}
+
+// --- real pixels -------------------------------------------------------------
+//
+// The four groups below use a real window, the real renderer, the real shipped
+// configuration and a real 64x64 image, and read pixels back off the screen.
+// mario_ground is opaque orange-brown (190,77,19) at its centre.
+
+// A 64x64 image centred on (200,200) spans 168..232 unscaled and 136..264 at
+// scale 2, so (150,200) is outside the first and inside the second.
+constexpr int kProbeX = 150;
+constexpr int kProbeY = 200;
+
+void testARealConfiguredTextureRendersPixels()
+{
+    sf::RenderWindow window(sf::VideoMode{200, 200}, "texture pixels");
+    graphics::SfmlRenderer renderer{window};
+    const assets::SfmlAssetManager assets = shippedAssets();
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    [[maybe_unused]] Input input;
+
+    EntityManager manager;
+    addTexturedEntity(manager, "mario_ground", Vec2{100.0F, 100.0F});
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    // The image spans 68..132, so the centre is image and the corner is not.
+    const sf::Color centre = readPixel(window, 100, 100);
+    const sf::Color outside = readPixel(window, 5, 5);
+    renderer.endFrame();
+
+    CHECK(centre.r == 190);
+    CHECK(centre.g == 77);
+    CHECK(centre.b == 19);
+    CHECK(outside.b == 255);
+    CHECK(outside.r == 0);
+}
+
+void testTexturePositionAffectsRenderedPixels()
+{
+    sf::RenderWindow window(sf::VideoMode{200, 200}, "texture position");
+    graphics::SfmlRenderer renderer{window};
+    const assets::SfmlAssetManager assets = shippedAssets();
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    [[maybe_unused]] Input input;
+
+    EntityManager manager;
+    // Off-centre, so the two candidate positions are distinguishable.
+    addTexturedEntity(manager, "mario_ground", Vec2{50.0F, 50.0F});
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    // At (50,50) the image spans 18..82, so (50,50) is image and (150,150) is not.
+    const sf::Color atPosition = readPixel(window, 50, 50);
+    const sf::Color elsewhere = readPixel(window, 150, 150);
+    renderer.endFrame();
+
+    CHECK(atPosition.r == 190);
+    CHECK(atPosition.g == 77);
+    CHECK(atPosition.b == 19);
+    CHECK(elsewhere.b == 255);
+    CHECK(elsewhere.r == 0);
+}
+
+void testTextureScaleAffectsRenderedPixels()
+{
+    // One window drawn twice, so scale is the only difference and the two frames
+    // are directly comparable.
+    sf::RenderWindow window(sf::VideoMode{400, 400}, "texture scale");
+    graphics::SfmlRenderer renderer{window};
+    const assets::SfmlAssetManager assets = shippedAssets();
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    [[maybe_unused]] Input input;
+
+    EntityManager unscaledManager;
+    addTexturedEntity(unscaledManager, "mario_ground", Vec2{200.0F, 200.0F}, Vec2{1.0F, 1.0F});
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderSystem.update(unscaledManager, input, 0.0F);
+    const sf::Color atScaleOne = readPixel(window, kProbeX, kProbeY);
+    renderer.endFrame();
+
+    EntityManager doubledManager;
+    addTexturedEntity(doubledManager, "mario_ground", Vec2{200.0F, 200.0F}, Vec2{2.0F, 2.0F});
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderSystem.update(doubledManager, input, 0.0F);
+    const sf::Color atScaleTwo = readPixel(window, kProbeX, kProbeY);
+    renderer.endFrame();
+
+    CHECK(atScaleOne.b == 255);
+    CHECK(atScaleOne.r == 0);
+    CHECK(atScaleTwo.r == 190);
+    CHECK(atScaleTwo.g == 77);
+    CHECK(atScaleTwo.b == 19);
+}
+
+void testCameraZoomAffectsRenderedTexturePixels()
+{
+    // The camera reaches textures through the same RenderTransform as everything
+    // else. There is no separate texture camera, so this is the rectangle zoom
+    // test with an image in place of a shape.
+    sf::RenderWindow window(sf::VideoMode{400, 400}, "texture zoom");
+    graphics::SfmlRenderer renderer{window};
+    const assets::SfmlAssetManager assets = shippedAssets();
+    [[maybe_unused]] Input input;
+
+    // The entity sits at the camera's own position, so it lands on the screen
+    // centre and stays there at any zoom. worldToScreen is
+    // (world - cameraPosition) * zoom + screenCentre, so a world position of
+    // (0,0) with a camera at (0,0) is always exactly the screen centre.
+    EntityManager manager;
+    addTexturedEntity(manager, "mario_ground", Vec2{0.0F, 0.0F});
+
+    // The camera's viewport is the window, so its screen centre is (200,200). That matters: zoom also scales a world
+    // position's offset from the centre, so an entity away from the centre would
+    // slide out from under the probe and the test would measure the wrong thing.
+    Camera unzoomed;
+    unzoomed.setViewport(Vec2{400.0F, 400.0F});
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    RenderSystem{renderer, unzoomed, assets}.update(manager, input, 0.0F);
+    const sf::Color atZoomOne = readPixel(window, kProbeX, kProbeY);
+    renderer.endFrame();
+
+    Camera zoomed;
+    zoomed.setViewport(Vec2{400.0F, 400.0F});
+    zoomed.setZoom(2.0F);
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    RenderSystem{renderer, zoomed, assets}.update(manager, input, 0.0F);
+    const sf::Color atZoomTwo = readPixel(window, kProbeX, kProbeY);
+    renderer.endFrame();
+
+    CHECK(atZoomOne.b == 255);
+    CHECK(atZoomOne.r == 0);
+    CHECK(atZoomTwo.r == 190);
+    CHECK(atZoomTwo.g == 77);
+    CHECK(atZoomTwo.b == 19);
+}
+
+void testRectangleRenderingIsUnchangedAlongsideTextures()
+{
+    // The regression guard for the whole step: with a texture in the world, a
+    // rectangle still lands on exactly the pixels it always did.
+    sf::RenderWindow window(sf::VideoMode{200, 200}, "rectangle unchanged");
+    graphics::SfmlRenderer renderer{window};
+    const assets::SfmlAssetManager assets = shippedAssets();
+    const Camera camera;
+    RenderSystem renderSystem{renderer, camera, assets};
+    [[maybe_unused]] Input input;
+
+    EntityManager manager;
+    Entity& rectangle = manager.addEntity("rectangle");
+    rectangle.addComponent<Transform>(Transform{Vec2{30.0F, 30.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    rectangle.addComponent<Rectangle>(Rectangle{Vec2{20.0F, 20.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
+    addTexturedEntity(manager, "mario_ground", Vec2{150.0F, 150.0F});
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderSystem.update(manager, input, 0.0F);
+
+    const sf::Color inRectangle = readPixel(window, 30, 30);
+    const sf::Color inTexture = readPixel(window, 150, 150);
+    renderer.endFrame();
+
+    // The rectangle is still exactly its own green, undisturbed.
+    CHECK(inRectangle.g == 255);
+    CHECK(inRectangle.r == 0);
+    CHECK(inRectangle.b == 0);
+
+    // And the texture drew its own colour, undisturbed.
+    CHECK(inTexture.r == 190);
+    CHECK(inTexture.g == 77);
+    CHECK(inTexture.b == 19);
+}
+
 } // namespace
 
 int main()
@@ -1001,6 +1723,27 @@ int main()
         {"camera preserves rotation and scale", &testCameraPreservesRotationAndScale},
         {"application renders renderable entities", &testApplicationRendersRenderableEntities},
         {"application survives no renderable entities", &testApplicationSurvivesNoRenderableEntities},
+        {"texture component stores an asset name", &testTextureComponentStoresAnAssetName},
+        {"texture component is plain data with no native state", &testTextureComponentIsPlainDataWithNoNativeState},
+        {"renderer interface exposes drawTexture", &testRendererInterfaceExposesDrawTexture},
+        {"a renderer without sfml still satisfies the interface", &testARendererWithoutSfmlStillSatisfiesTheInterface},
+        {"render system texture query draws textures", &testRenderSystemTextureQueryDrawsTextures},
+        {"render system requests the name the component carries", &testRenderSystemRequestsTheNameTheComponentCarries},
+        {"render system submits the manager's own handle", &testRenderSystemSubmitsTheManagersOwnHandle},
+        {"transform position moves the texture", &testTransformPositionMovesTheTexture},
+        {"transform scale scales the texture", &testTransformScaleScalesTheTexture},
+        {"camera zoom scales the texture without moving it", &testCameraZoomScalesTheTextureWithoutMovingIt},
+        {"missing asset name propagates", &testMissingAssetNamePropagates},
+        {"render system without an asset manager reports it", &testRenderSystemWithoutAnAssetManagerReportsIt},
+        {"rectangle query is unaffected by textures", &testRectangleQueryIsUnaffectedByTextures},
+        {"textures are drawn after rectangles", &testTexturesAreDrawnAfterRectangles},
+        {"an entity with both components draws both rectangle first", &testAnEntityWithBothComponentsDrawsBothRectangleFirst},
+        {"render system does not write to the texture transform", &testRenderSystemDoesNotWriteToTheTextureTransform},
+        {"a real configured texture renders pixels", &testARealConfiguredTextureRendersPixels},
+        {"texture position affects rendered pixels", &testTexturePositionAffectsRenderedPixels},
+        {"texture scale affects rendered pixels", &testTextureScaleAffectsRenderedPixels},
+        {"camera zoom affects rendered texture pixels", &testCameraZoomAffectsRenderedTexturePixels},
+        {"rectangle rendering is unchanged alongside textures", &testRectangleRenderingIsUnchangedAlongsideTextures},
     };
 
     int failedGroups = 0;

@@ -1,13 +1,21 @@
 #include "engine/graphics/SfmlRenderer.hpp"
 
+// The definition of assets::Texture::Impl, so the pixels behind a handle can be
+// read. SfmlRenderer is one of exactly two friends of Texture for this reason: it
+// is the engine's other SFML boundary, and drawing requires the platform
+// resource. Nothing else in the engine can reach inside a handle.
+#include "AssetHandleNative.hpp"
+
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/RectangleShape.hpp>
 #include <SFML/Graphics/RenderStates.hpp>
 #include <SFML/Graphics/RenderWindow.hpp>
+#include <SFML/Graphics/Sprite.hpp>
 #include <SFML/Graphics/Transform.hpp>
 #include <SFML/System/Vector2.hpp>
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace engine::graphics
 {
@@ -25,6 +33,29 @@ namespace
 [[nodiscard]] sf::Color toSfmlColor(const Color& color) noexcept
 {
     return sf::Color{toByte(color.red), toByte(color.green), toByte(color.blue), toByte(color.alpha)};
+}
+
+/// Turns a placement into render states, shared by every draw call.
+///
+/// Factored out rather than written twice because the two draws *must* agree: a
+/// rectangle and a texture that were composed separately would eventually drift,
+/// and a sprite that scaled about a different point from a rectangle would be a
+/// miserable bug to find. One function makes the agreement structural.
+///
+/// translate, then rotate, then scale. Composed this way the object scales and
+/// rotates about its own centre and then moves to its position, which is the
+/// order a reader expects, and is unchanged from the rectangle-only version of
+/// this file.
+[[nodiscard]] sf::RenderStates statesFor(const RenderTransform& placement)
+{
+    sf::Transform transform;
+    transform.translate(placement.position.x, placement.position.y);
+    transform.rotate(placement.rotationDegrees);
+    transform.scale(placement.scale.x, placement.scale.y);
+
+    sf::RenderStates states;
+    states.transform = transform;
+    return states;
 }
 
 } // namespace
@@ -55,18 +86,31 @@ void SfmlRenderer::drawRectangle(const Vec2& size, const Color& color, const Ren
     // anchor field into the component.
     shape.setOrigin(sf::Vector2f{size.x * 0.5F, size.y * 0.5F});
 
-    // translate, then rotate, then scale. Composed this way the object scales
-    // and rotates about its own centre and then moves to its position, which is
-    // the order a reader expects.
-    sf::Transform transform;
-    transform.translate(placement.position.x, placement.position.y);
-    transform.rotate(placement.rotationDegrees);
-    transform.scale(placement.scale.x, placement.scale.y);
+    m_window->draw(shape, statesFor(placement));
+}
 
-    sf::RenderStates states;
-    states.transform = transform;
+void SfmlRenderer::drawTexture(const assets::Texture& texture, const RenderTransform& placement)
+{
+    // An empty handle has no pixels. Drawing nothing would be a silent failure
+    // that shows up much later as a missing sprite with no explanation, so this
+    // reports it at the point of the mistake instead.
+    if (texture.m_impl == nullptr)
+    {
+        throw std::logic_error{"SfmlRenderer::drawTexture called with an empty texture handle"};
+    }
 
-    m_window->draw(shape, states);
+    const sf::Texture& native = texture.m_impl->native;
+    const sf::Vector2u size = native.getSize();
+
+    // The whole image, centred, the same convention as a rectangle. No source
+    // rectangle: frames are a later concern and there is nothing to select one
+    // from yet.
+    sf::Sprite sprite{native};
+    sprite.setOrigin(sf::Vector2f{static_cast<float>(size.x) * 0.5F, static_cast<float>(size.y) * 0.5F});
+
+    // Same states function as the rectangle, so a sprite and a rectangle at the
+    // same placement land in the same place at the same size.
+    m_window->draw(sprite, statesFor(placement));
 }
 
 void SfmlRenderer::endFrame()

@@ -161,6 +161,13 @@ target_include_directories(engine PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
                            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>)
 
+# The renderer is the second of exactly two things allowed to look inside an asset
+# handle, because drawing requires the platform resource. That needs the
+# definition of Texture::Impl, which lives in the assets library's private header.
+# PRIVATE, so it is not part of the engine's own public include surface.
+target_include_directories(engine PRIVATE
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/engine/assets/internal>)
+
 target_link_libraries(engine PUBLIC sfml-graphics sfml-window engine_assets engine_assets_sfml)
 target_compile_features(engine PUBLIC cxx_std_17)
 target_compile_options(engine PRIVATE ${ENGINE_WARNING_FLAGS})
@@ -223,6 +230,11 @@ if(ENGINE_BUILD_TESTS)
     add_executable(render_test tests/RenderTest.cpp)
     target_link_libraries(render_test PRIVATE engine)
     target_compile_options(render_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    # The texture groups render a real configured asset, so the suite needs to know
+    # where the shipped configuration is. Injected rather than hard-coded so the
+    # test does not assume where the repository is checked out.
+    target_compile_definitions(render_test PRIVATE
+        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt")
     add_test(NAME render.foundation COMMAND render_test)
     set_tests_properties(render.foundation PROPERTIES TIMEOUT 60)
 

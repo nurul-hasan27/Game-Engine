@@ -2,6 +2,16 @@
 
 #include <memory>
 
+namespace engine::graphics
+{
+
+/// The SFML renderer, which has to reach the platform texture in order to draw
+/// it. Declared here only so a handle can name it as a friend; nothing about it
+/// reaches this header.
+class SfmlRenderer;
+
+} // namespace engine::graphics
+
 namespace engine::assets
 {
 
@@ -114,11 +124,14 @@ public:
     Texture& operator=(const Texture&) = delete;
 
 private:
-    /// The concrete implementation populates a handle from the platform resource
-    /// it owns. Being the loader, and only the loader, is what keeps a handle
-    /// meaning "empty, or holding exactly what was loaded for it" instead of
-    /// "anything with a pointer to an implementation can reach in and set it".
+    /// Exactly two things are allowed to look inside a handle, and both are
+    /// deliberate SFML boundaries for the engine rather than accidents: the
+    /// loader, which fills the handle in, and the renderer, which has to read the
+    /// pixels back out to draw them. Nobody else can, so a handle cannot be
+    /// populated or emptied behind the asset manager's back, and no layer above
+    /// either boundary can reach a graphics type through a handle.
     friend class SfmlAssetManager;
+    friend class graphics::SfmlRenderer;
 
     /// The opaque implementation. Defined with the concrete graphics type in a
     /// private header, and never named here, so its contents stay private.
