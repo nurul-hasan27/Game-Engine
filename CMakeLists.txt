@@ -259,4 +259,19 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_FONT_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/Font.cpp")
     add_test(NAME assets.handles COMMAND asset_handle_test)
     set_tests_properties(assets.handles PROPERTIES TIMEOUT 60)
+
+    # The asset manager interface.
+    #
+    # Header-only, so there is no new source to compile, and linked against
+    # engine_assets like the two suites above so it too builds with no SFML on the
+    # link line. The header's own text is injected so the suite can assert the
+    # interface stays SFML-free and stays read-only, neither of which any runtime
+    # behaviour could reveal.
+    add_executable(asset_manager_test tests/AssetManagerTest.cpp)
+    target_link_libraries(asset_manager_test PRIVATE engine_assets)
+    target_compile_options(asset_manager_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(asset_manager_test PRIVATE
+        ENGINE_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/AssetManager.hpp")
+    add_test(NAME assets.manager_interface COMMAND asset_manager_test)
+    set_tests_properties(assets.manager_interface PROPERTIES TIMEOUT 60)
 endif()
