@@ -83,10 +83,24 @@ SfmlAssetManager::SfmlAssetManager(const std::filesystem::path& configurationPat
             // library ever changes that, the loader tests fail on the pixel
             // comparison rather than on somebody noticing wrong colours on screen.
             //
-            // Smooth filtering is deliberately left at the library default. The
-            // assignment specification does not mention it, and nearest-neighbour
-            // is the correct choice for this pixel art; setting smoothing would be
-            // a guess rather than a requirement.
+            // Smooth filtering is deliberately left at the library default, which
+            // is nearest-neighbour. No smoothing API is called anywhere in the
+            // engine.
+            //
+            // Recorded as a decision rather than an oversight, because the two
+            // sources genuinely disagree: the assignment specification does not
+            // mention smoothing at all, while the course's reference
+            // implementation defaults its texture loader to smooth = true. Where a
+            // specification is silent and a reference implementation guesses, the
+            // specification wins - adopting the guess would be introducing a
+            // requirement nobody wrote down.
+            //
+            // Nearest-neighbour is also the right choice for this artwork, which
+            // is hand-placed 2D pixel art with a deliberate limited palette, so
+            // smoothing would soften edges the art depends on.
+            //
+            // Changing this is not a one-line edit: it changes rendered output, so
+            // it needs a documented decision and a pixel test to match.
             const auto inserted = m_textures.try_emplace(entry.name);
             inserted.first->second.m_impl = std::make_unique<Texture::Impl>();
             inserted.first->second.m_impl->native = std::move(native);
