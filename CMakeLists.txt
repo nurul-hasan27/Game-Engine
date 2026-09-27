@@ -95,6 +95,25 @@ endif()
 # Targets
 # ---------------------------------------------------------------------------
 
+# The asset configuration parser, kept in its own library so that its isolation
+# is a property of the build rather than a promise in a comment.
+#
+# AssetFile.cpp is deliberately SFML-free and filesystem-free: it parses the
+# contents of a configuration string and never touches a file or a graphics
+# context. This target deliberately does not link SFML, so an
+# `#include <SFML/...>` added to the parser would fail to compile, and a symbol
+# from SFML would fail to link. Either way the boundary holds without anyone
+# having to remember it. The test suite below relies on exactly that.
+add_library(engine_assets STATIC
+            src/engine/assets/AssetFile.cpp)
+
+target_include_directories(engine_assets PUBLIC
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+                           $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>)
+
+target_compile_features(engine_assets PUBLIC cxx_std_17)
+target_compile_options(engine_assets PRIVATE ${ENGINE_WARNING_FLAGS})
+
 # The reusable engine library. It deliberately contains no main() so that the
 # examples and the tests can each provide their own entry point.
 add_library(engine STATIC
@@ -116,7 +135,7 @@ target_include_directories(engine PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
                            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>)
 
-target_link_libraries(engine PUBLIC sfml-graphics sfml-window)
+target_link_libraries(engine PUBLIC sfml-graphics sfml-window engine_assets)
 target_compile_features(engine PUBLIC cxx_std_17)
 target_compile_options(engine PRIVATE ${ENGINE_WARNING_FLAGS})
 
@@ -201,4 +220,21 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(camera_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME camera.world_to_screen COMMAND camera_test)
     set_tests_properties(camera.world_to_screen PROPERTIES TIMEOUT 60)
+
+    # Asset configuration parser.
+    #
+    # This test deliberately links engine_assets rather than engine. Nothing in
+    # it needs a window, a GPU or SFML, and linking the parser's own library is
+    # what turns "the parser is SFML-free" from a comment into something the
+    # linker enforces. The two source paths are injected so the suite can also
+    # assert on the parser's own text, which is the only way to check that no
+    # filesystem call has been added to code whose behaviour cannot reveal it.
+    add_executable(asset_file_test tests/AssetFileTest.cpp)
+    target_link_libraries(asset_file_test PRIVATE engine_assets)
+    target_compile_options(asset_file_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(asset_file_test PRIVATE
+        ENGINE_ASSET_FILE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/AssetFile.hpp"
+        ENGINE_ASSET_FILE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/assets/AssetFile.cpp")
+    add_test(NAME assets.configuration_parser COMMAND asset_file_test)
+    set_tests_properties(assets.configuration_parser PROPERTIES TIMEOUT 60)
 endif()
