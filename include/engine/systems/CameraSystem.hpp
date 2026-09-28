@@ -3,6 +3,7 @@
 #include "engine/ecs/System.hpp"
 #include "engine/graphics/Camera.hpp"
 
+#include <string>
 #include <string_view>
 
 namespace engine::ecs
@@ -69,10 +70,14 @@ class CameraSystem final : public engine::ecs::System
 public:
     /// @param camera The camera to drive. Referenced, not owned: `Application`
     ///        owns it, and a system must not own the thing it renders.
-    /// @param targetTag Tag of the entity to follow. The tag must outlive this
-    ///        system. An empty tag matches every entity, so an empty tag would
-    ///        follow the first one created rather than nothing.
-    CameraSystem(graphics::Camera& camera, std::string_view targetTag) noexcept
+    /// @param targetTag Tag of the entity to follow. **Copied**, not viewed - see
+    ///        the note on the member. An empty tag matches every entity, so an empty
+    ///        tag would follow the first one created rather than nothing.
+    ///
+    /// The parameter is a `string_view` for the caller's convenience, because a tag
+    /// is nearly always a literal, and the member is a `std::string` so the caller
+    /// does not have to think about lifetimes at all.
+    CameraSystem(graphics::Camera& camera, const std::string_view targetTag)
         : m_camera{&camera}, m_targetTag{targetTag}
     {
     }
@@ -82,11 +87,26 @@ public:
     [[nodiscard]] const char* name() const override { return "CameraSystem"; }
 
     /// The tag being followed. Diagnostics and tests only.
-    [[nodiscard]] std::string_view targetTag() const noexcept { return m_targetTag; }
+    [[nodiscard]] const std::string& targetTag() const noexcept { return m_targetTag; }
 
 private:
     graphics::Camera* m_camera = nullptr;
-    std::string_view m_targetTag;
+
+    /// The tag being followed, **owned**.
+    ///
+    /// This was a `std::string_view`, and that was a real bug rather than a
+    /// stylistic choice. A view stored in a class lives as long as the class, so any
+    /// caller passing a temporary `std::string` - which is exactly what
+    /// `add<CameraSystem>(camera, std::string{tag})` does, and what the game did once
+    /// the level's tag was no longer a file-scope constant - left this member
+    /// pointing at freed stack. The symptom was a `string_view` compare reading
+    /// twelve bytes out of an eight-byte stack slot, which is how AddressSanitizer
+    /// found it and how nothing else did: the demo passed a string literal, every
+    /// test passed a literal, and the garbage usually happened not to match.
+    ///
+    /// A tag is a few bytes and is compared once per frame. Copying it once, at
+    /// construction, is not a cost worth optimising away from correctness.
+    std::string m_targetTag;
 };
 
 } // namespace engine::systems

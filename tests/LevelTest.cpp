@@ -5,6 +5,10 @@
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
+#include "engine/ecs/SystemManager.hpp"
+#include "engine/graphics/Camera.hpp"
+#include "engine/input/ActionState.hpp"
+#include "engine/systems/CameraSystem.hpp"
 #include "engine/level/Level.hpp"
 #include "engine/level/LevelFile.hpp"
 #include "engine/level/LevelGrid.hpp"
@@ -208,6 +212,31 @@ void declareTheCommittedLevel(FakeAssetManager& assets)
     assets.declare("mario_SmallBush_dec", 150, 68);
     assets.declare("mario_BigBush_dec", 186, 79);
     assets.declare("megaman_megaBuster_shot", 32, 26);
+}
+
+/// Overwrites a frame of stack with a pattern, and returns what it wrote.
+///
+/// The point is the *side effect*, not the value. A `std::string_view` left pointing
+/// at a destroyed temporary still reads whatever bytes happen to be there, so a test
+/// for a dangling view has to arrange for those bytes to have changed. Filling a
+/// frame of locals is the closest honest approximation of what really happens in a
+/// program: something else uses that stack before the dangling read occurs.
+///
+/// `noinline` so this gets its own frame, and `volatile` on the buffer so the
+/// compiler cannot decide the writes are dead and skip them.
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((noinline))
+#endif
+std::size_t
+clobberStack()
+{
+    volatile unsigned char scratch[512] = {};
+    for (std::size_t index = 0U; index < sizeof(scratch); ++index)
+    {
+        scratch[index] = static_cast<unsigned char>(0xABU);
+    }
+
+    return scratch[0];
 }
 
 /// Counts what a view yields, the way `EcsTest` does it.
@@ -1135,6 +1164,46 @@ void testATileCarriesTheAnimationTheLevelNamed()
     }
 }
 
+void testACameraSystemRegisteredFromATemporaryTagStillFindsItsTarget()
+{
+    // A dangling `std::string_view`, found by AddressSanitizer and not by any test.
+    //
+    // `CameraSystem` stores the tag it is given for the whole life of the system. It
+    // used to store a `std::string_view`, so `add<CameraSystem>(camera,
+    // std::string{tag})` - passing a temporary, which is what a caller naturally
+    // writes when the tag is a `constexpr std::string_view` constant - left the
+    // member pointing at freed stack. AddressSanitizer reported a twelve-byte read
+    // out of an eight-byte stack slot; no test noticed, because the demo and every
+    // test happened to pass a string literal and the garbage usually did not match
+    // anything.
+    //
+    // Reproducing it needs the stack to actually be reused, or the freed bytes are
+    // still intact and the test passes by luck. `clobberStack` therefore writes over
+    // a frame of locals first, which is what a real program does between registering
+    // a system and running its first frame.
+    engine::graphics::Camera camera;
+    engine::ecs::SystemManager systems;
+    systems.add<engine::systems::CameraSystem>(camera, std::string{engine::level::kPlayerTag});
+
+    // Registering took a temporary's address; scribble over the stack it lived on.
+    clobberStack();
+
+    // Now build the world the system is meant to follow, and run a frame.
+    EntityManager world;
+    Entity& player = world.addEntity(std::string{engine::level::kPlayerTag});
+    player.addComponent<Transform>(Transform{Vec2{900.0F, 700.0F}, Vec2{}, Vec2{1.0F, 1.0F}, 0.0F});
+
+    Entity& other = world.addEntity("decoration");
+    other.addComponent<Transform>(Transform{Vec2{100.0F, 100.0F}, Vec2{}, Vec2{1.0F, 1.0F}, 0.0F});
+
+    const engine::input::ActionState actions;
+    systems.update(world, actions, 1.0F);
+
+    // The camera followed the player, which it can only do by comparing a live tag.
+    // With a dangling view this compares freed memory and matches nothing.
+    CHECK_NEAR_VEC(camera.position(), Vec2(900.0F, 700.0F));
+}
+
 void testTwoLoadersOverTwoManagersEachUseTheirOwn()
 {
     // No hidden global.
@@ -2006,6 +2075,8 @@ int main()
          &testTheExtentFollowsTheTallestTileNotJustTheTallestDecoration},
         {"the extent follows the widest tile", &testTheExtentFollowsTheWidestTile},
         {"set player keeps the first player", &testSetPlayerKeepsTheFirstPlayer},
+        {"a camera system registered from a temporary tag still finds its target",
+         &testACameraSystemRegisteredFromATemporaryTagStillFindsItsTarget},
         {"two loaders over two managers each use their own", &testTwoLoadersOverTwoManagersEachUseTheirOwn},
         {"each tile keeps its own animation name", &testEachTileKeepsItsOwnAnimationName},
         {"a tile carries the animation the level named", &testATileCarriesTheAnimationTheLevelNamed},
