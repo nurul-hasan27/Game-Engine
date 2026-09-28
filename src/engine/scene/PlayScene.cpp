@@ -168,7 +168,7 @@ PlayScene::PlayScene(const SceneContext& context)
               << " decorations, 1 player and 1 text label (" << spawned + 1 << " entities).\n";
 }
 
-void PlayScene::update(const input::ActionState& actions, const float deltaSeconds)
+void PlayScene::onUpdate(const input::ActionState& actions, const float deltaSeconds)
 {
     // Back to the menu, on the press edge. The course's Assignment 3 says "The 'ESC'
     // key should go 'back' to the Main Menu, or quit if on the Main Menu", and the

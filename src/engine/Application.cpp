@@ -140,9 +140,29 @@ std::optional<scene::SceneId> Application::sceneId() const noexcept
 
 void Application::applyPendingTransition()
 {
+    // Harvest the active scene's request first, so that a scene asking to be
+    // replaced is what causes the replacement.
+    //
+    // A request already recorded by `changeScene` wins, because that came from the
+    // owner and is a deliberate instruction about what the game should be doing; a
+    // scene's own opinion is a *request*, and an owner that has already decided
+    // should not be argued out of it by the thing it is deciding about.
+    //
+    // Read through a const accessor and cleared by [Scene::update] before the scene
+    // runs, so a request lasts exactly one frame. That is what stops a scene whose
+    // request was never acted on from asking again on every frame forever.
+    if (!m_pendingTransition.has_value() && m_scene != nullptr)
+    {
+        const scene::SceneTransition& asked = m_scene->pendingTransition();
+        if (asked.scene().has_value() || asked.quits())
+        {
+            m_pendingTransition = asked;
+        }
+    }
+
     if (!m_pendingTransition.has_value())
     {
-        return;
+        return; // No scene asked, and nobody called `changeScene`: the common frame.
     }
 
     const scene::SceneTransition requested = *m_pendingTransition;

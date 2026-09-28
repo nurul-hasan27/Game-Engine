@@ -62,7 +62,11 @@ public:
     explicit MenuScene(const SceneContext& context);
 
     /// Reads navigation and confirmation, and refreshes the option captions.
-    void update(const input::ActionState& actions, float deltaSeconds) override;
+    ///
+    /// Overrides [Scene::onUpdate] rather than `update`, because the base class
+    /// clears the pending request before calling this. See [Scene::update] for why
+    /// that is not left to each scene.
+    void onUpdate(const input::ActionState& actions, float deltaSeconds) override;
 
     /// Submits the menu's world to the shared renderer.
     void render() override;

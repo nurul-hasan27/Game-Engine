@@ -50,7 +50,11 @@ public:
     explicit PlayScene(const SceneContext& context);
 
     /// Runs the scene's systems, in registration order.
-    void update(const input::ActionState& actions, float deltaSeconds) override;
+    ///
+    /// Overrides [Scene::onUpdate] rather than `update`, because the base class
+    /// clears the pending request before calling this. See [Scene::update] for why
+    /// that is not left to each scene.
+    void onUpdate(const input::ActionState& actions, float deltaSeconds) override;
 
     /// Submits the level's world to the shared renderer.
     void render() override;

@@ -106,7 +106,7 @@ void MenuScene::refreshSelection()
     }
 }
 
-void MenuScene::update(const input::ActionState& actions, const float deltaSeconds)
+void MenuScene::onUpdate(const input::ActionState& actions, const float deltaSeconds)
 {
     // No simulation: a menu has no physics and no timing. The parameter is accepted
     // only so every scene shares one signature, exactly as every system does.

@@ -48,6 +48,16 @@ enum class SceneId
 class SceneTransition
 {
 public:
+    /// "Nothing was asked for" - the same value as [stay].
+    ///
+    /// Public because it is a state a caller legitimately holds, not just one the
+    /// factory methods hand out: a scene's own pending request starts as this, a
+    /// default-constructed [Scene] has one, and a test asserting on a transition
+    /// needs to be able to write "no transition" without a verb. Declaring the
+    /// two-argument constructor below suppresses the implicit default one, so this
+    /// is written out rather than left to the compiler.
+    SceneTransition() noexcept = default;
+
     /// Keep the current scene, and keep running.
     [[nodiscard]] static SceneTransition stay() noexcept { return {}; }
 
@@ -75,13 +85,6 @@ public:
     [[nodiscard]] bool quits() const noexcept { return m_quit; }
 
 private:
-    /// The implicit "nothing was asked for" state, which is what [stay] returns.
-    ///
-    /// Declared rather than left implicit because the two-argument constructor
-    /// below suppresses the compiler-generated default one, and `return {};` in
-    /// [stay] has to find *some* constructor to call.
-    SceneTransition() noexcept = default;
-
     SceneTransition(const std::optional<SceneId> scene, const bool quit) noexcept : m_scene{scene}, m_quit{quit} {}
 
     /// Neither member is `const`, and that is load bearing rather than an oversight.
@@ -231,7 +234,30 @@ public:
     ///        from physical input by the owner. A scene reads actions and never
     ///        names a key: that is what the action layer is for.
     /// @param deltaSeconds How long the frame actually took, in real seconds.
-    virtual void update(const input::ActionState& actions, float deltaSeconds) = 0;
+    ///
+    /// ### Not virtual, and that is deliberate
+    ///
+    /// This is a template method over a virtual [onUpdate], so that the base class
+    /// can clear the pending request *before* the scene runs.
+    ///
+    /// The alternative was to leave `update` virtual and ask every scene to reset
+    /// its own transition first - which is a rule no compiler enforces and every
+    /// subclass can forget. And a subclass that forgets does not fail loudly: the
+    /// request simply never clears, and the owner re-applies it every frame, so the
+    /// game ping-pongs between two scenes forever with no error anywhere. A rule
+    /// whose failure mode is an infinite loop with no diagnostic belongs in the base
+    /// class, not in a comment asking subclasses to be careful.
+    ///
+    /// The consequence is the rule it enforces: **a request lives exactly one
+    /// frame.** A scene asks during its update; the owner reads it at the next
+    /// frame boundary and applies it; by the time the scene runs again its request
+    /// is gone, so a scene that asked and was not answered does not ask again.
+    void update(const input::ActionState& actions, const float deltaSeconds)
+    {
+        m_transition = SceneTransition{};
+
+        onUpdate(actions, deltaSeconds);
+    }
 
     /// Draws this scene's world.
     ///
@@ -265,6 +291,12 @@ public:
 protected:
     /// Borrows `context`, which must outlive this scene.
     explicit Scene(const SceneContext& context) noexcept : m_context{&context} {}
+
+    /// This scene's behaviour for one frame.
+    ///
+    /// Called by [update], which has already cleared the pending request. A scene
+    /// overrides this and never `update` itself, so it cannot forget to clear.
+    virtual void onUpdate(const input::ActionState& actions, float deltaSeconds) = 0;
 
     /// Asks for a scene switch. Applied at the start of the next frame.
     ///
