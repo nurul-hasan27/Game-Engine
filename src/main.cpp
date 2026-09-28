@@ -1,14 +1,18 @@
 #include "engine/Application.hpp"
+#include "engine/components/Animation.hpp"
 #include "engine/components/Body.hpp"
 #include "engine/components/Collider.hpp"
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/graphics/Camera.hpp"
+#include "engine/systems/AnimationSystem.hpp"
 #include "engine/systems/CameraSystem.hpp"
 #include "engine/systems/MovementSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
 
 #include <charconv>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -21,6 +25,7 @@ namespace
 {
 
 using engine::Vec2;
+using engine::components::Animation;
 using engine::components::Body;
 using engine::components::Collider;
 using engine::components::Rectangle;
@@ -32,6 +37,7 @@ using engine::graphics::Camera;
 using engine::input::Input;
 using engine::input::Key;
 using engine::physics::BodyType;
+using engine::systems::AnimationSystem;
 using engine::systems::CameraSystem;
 using engine::systems::MovementSystem;
 using engine::systems::PhysicsSystem;
@@ -112,7 +118,7 @@ private:
 /// format and no level editor yet, because none of them are needed to show that
 /// a camera works. `main` is where the game assembles its world; the engine
 /// itself stays unaware that a player, a wall or a camera exists.
-void buildCameraDemo(EntityManager& world, SystemManager& systems, Camera& camera)
+void buildCameraDemo(EntityManager& world, SystemManager& systems, Camera& camera, const engine::assets::AssetManager& assets)
 {
     // Registration order is the update order, and every arrow below matters:
     //
@@ -128,6 +134,20 @@ void buildCameraDemo(EntityManager& world, SystemManager& systems, Camera& camer
     systems.add<PhysicsSystem>();
     systems.add<CameraSystem>(camera, kPlayerTag);
     systems.add<ZoomKeysSystem>(camera);
+
+    //   AnimationSystem  game frame      -> which frame is showing
+    //
+    // Last, so a frame is chosen once per game frame from a position that has
+    // already settled. An animation's speed is counted in game frames, and
+    // `AnimationSystem::update()` is called exactly once per frame here, so the
+    // count is the loop's and not a wall-clock guess.
+    //
+    // It takes the manager by const reference rather than loading anything itself,
+    // and it is not the thing that draws: `RenderSystem` reads the frame this
+    // system chose. The two are separate because behaviour and drawing are
+    // separate concerns, and because the final frame of a finished animation has
+    // to be presented before the entity is removed.
+    systems.add<AnimationSystem>(assets);
 
     // A slate grey for the boundary, a green for obstacles, and a dim blue for
     // the scattered pillars, so the eye can tell structure from scenery.
@@ -178,6 +198,45 @@ void buildCameraDemo(EntityManager& world, SystemManager& systems, Camera& camer
     player.addComponent<Rectangle>(Rectangle{Vec2{50.0F, 50.0F}, engine::Color{0.95F, 0.78F, 0.25F, 1.0F}});
     player.addComponent<Collider>(Collider{Vec2{50.0F, 50.0F}});
     player.addComponent<Body>(Body{BodyType::Dynamic});
+
+    // A row of walking Goombas, to show animation end to end.
+    //
+    // These carry a `components::Animation` and no `components::Rectangle`, so
+    // they are drawn by `RenderSystem`'s animation query as one frame of a sprite
+    // sheet rather than as a filled shape. Three of them share one asset, and
+    // because the frame index lives on the component rather than on the asset they
+    // are deliberately on three different frames: the first starts part way
+    // through, the second part way through again, and the third at frame zero.
+    //
+    // The offsets are what make that visible. If the current frame were stored on
+    // the shared asset - the mistake the course's reference implementation makes -
+    // all three would show the same picture no matter what these say.
+    constexpr const char* kWalkAnimations[] = {"mario_GoombaWalk_walk", "mario_GoombaWalk_walk",
+                                               "mario_GoombaWalk_walk"};
+
+    for (std::uint32_t index = 0U; index < 3U; ++index)
+    {
+        Entity& goomba = world.addEntity("goomba");
+        goomba.addComponent<Transform>(
+            Transform{Vec2{1100.0F + static_cast<float>(index) * 140.0F, 700.0F}, Vec2{0.0F, 0.0F},
+                      Vec2{1.0F, 1.0F}, 0.0F});
+
+        Animation animation;
+        animation.assetName = kWalkAnimations[index];
+        animation.repeat = true;
+        // Frame 1 of a 2-frame animation, on a speed of 8, so each goomba is
+        // offset from the others but all of them keep walking.
+        animation.currentFrame = index == 1U ? 1U : 0U;
+        animation.ticksOnFrame = index * 4U;
+        goomba.addComponent<Animation>(animation);
+
+        // The goomba's box, so the pillars and it interact and the player can
+        // walk into it. Its size is the animation's *frame* size - 50x41 - which is
+        // the course's rule that a tile's collision box matches its animation, and
+        // not the 100x41 of the whole sheet.
+        goomba.addComponent<Collider>(Collider{Vec2{50.0F, 41.0F}});
+        goomba.addComponent<Body>(Body{BodyType::Static});
+    }
 }
 
 /// Reads the optional `--frames <count>` argument.
@@ -228,7 +287,8 @@ int main(const int argc, char* const argv[])
         const std::optional<std::size_t> frameLimit = parseFrameLimit(argc, argv);
 
         engine::Application application;
-        buildCameraDemo(application.entityManager(), application.systemManager(), application.camera());
+        buildCameraDemo(application.entityManager(), application.systemManager(), application.camera(),
+                        application.assets());
         return application.run(frameLimit);
     }
     catch (const std::exception& error)

@@ -169,6 +169,7 @@ add_library(engine STATIC
             src/engine/graphics/SfmlRenderer.cpp
             src/engine/input/SfmlKeyMap.cpp
             src/engine/math/Vec2.cpp
+            src/engine/systems/AnimationSystem.cpp
             src/engine/systems/CameraSystem.cpp
             src/engine/systems/MovementSystem.cpp
             src/engine/systems/PhysicsSystem.cpp
@@ -259,6 +260,21 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_RENDERER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/graphics/Renderer.hpp")
     add_test(NAME render.foundation COMMAND render_test)
     set_tests_properties(render.foundation PROPERTIES TIMEOUT 60)
+
+    # Animation: the playback rule, the component, the systems and the render
+    # path, from both ends of the abstraction.
+    #
+    # The groups that need pixels build a real `SfmlAssetManager` over the shipped
+    # configuration and a real `Application`, because the point of them is that the
+    # engine's own manager and loop resolve the names. The rest use doubles, since
+    # frame arithmetic and what a system submits need no graphics at all.
+    add_executable(animation_test tests/AnimationTest.cpp)
+    target_link_libraries(animation_test PRIVATE engine)
+    target_compile_options(animation_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(animation_test PRIVATE
+        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt")
+    add_test(NAME animation.playback COMMAND animation_test)
+    set_tests_properties(animation.playback PROPERTIES TIMEOUT 120)
 
     # Input: the key state machine, the SFML key adapter, and MovementSystem.
     add_executable(input_test tests/InputTest.cpp)
