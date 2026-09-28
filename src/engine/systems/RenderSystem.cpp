@@ -2,6 +2,7 @@
 
 #include "engine/components/Animation.hpp"
 #include "engine/components/Rectangle.hpp"
+#include "engine/components/Text.hpp"
 #include "engine/components/Texture.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
@@ -10,6 +11,20 @@
 
 namespace engine::systems
 {
+
+namespace
+{
+
+/// The colour text is drawn in when the component does not say.
+///
+/// A named constant rather than a literal buried in the draw call, so that the
+/// question "what colour is text?" has one answer in the engine instead of one per
+/// call site. [engine::kWhite](engine/Color.hpp) is right because it is the
+/// graphics library's own default for a text fill, so an implementation that did
+/// nothing at all would produce the same picture.
+constexpr Color kDefaultTextColor{1.0F, 1.0F, 1.0F, 1.0F};
+
+} // namespace
 
 void RenderSystem::update(engine::ecs::EntityManager& entities, const input::ActionState& actions, const float deltaSeconds)
 {
@@ -115,6 +130,44 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, const input::Act
         // sprite and a rectangle with the same Transform land identically, zoom
         // included.
         m_renderer->drawTexture(texture, graphics::toRenderTransform(transform, *m_camera), source);
+    }
+
+    // ---- Query 4: text ------------------------------------------------------
+    //
+    // Appended fourth, so strings are drawn after rectangles, plain textures and
+    // animation frames, and therefore on top of them. That is the same consequence
+    // of being a later query that query 3 is, and for the same reason: there is no
+    // z-order, no layer field and no sorting anywhere in this engine. A label that
+    // has to sit behind a sprite is a question about layers, and answering it would
+    // mean building a scheme with exactly one user.
+    //
+    // ### A string does not skip an entity that also has something else to draw
+    //
+    // Query 2 skips an entity that animates, and the reason is specific: a
+    // `Texture` and an `Animation` on one entity would draw **the same artwork
+    // twice**, once whole and once as a frame, and skipping is what makes it drawn
+    // exactly once. Text and a `Rectangle` or an `Animation` draw *different* things
+    // - a label and a box behind it, or a label on a sprite - and drawing both is
+    // exactly what was asked for. So there is no skip rule here, and none is needed:
+    // the query order above already decides which of them is on top.
+    for (auto&& [entity, transform, text] : entities.query<components::Transform, components::Text>())
+    {
+        static_cast<void>(entity);
+
+        // The font is resolved by name, exactly as a texture and an animation are.
+        // A name that is not declared throws from the lookup and is deliberately not
+        // caught, for the reason the other two queries give: a label that silently
+        // draws nothing is a bug that surfaces much later as missing text with
+        // nothing pointing at the cause.
+        //
+        // `components::Text` carries no colour, which is the same decision
+        // `Texture` and `Animation` make - they draw from an asset rather than being
+        // a coloured primitive. The renderer still takes one, the way
+        // `drawRectangle` does, so the default lives here as a named constant
+        // rather than being buried in the graphics layer. Nothing has asked for
+        // coloured text, and the course does not ask for it.
+        m_renderer->drawText(m_assets.font(text.fontAssetName), text.content, text.characterSize, kDefaultTextColor,
+                             graphics::toRenderTransform(transform, *m_camera));
     }
 }
 

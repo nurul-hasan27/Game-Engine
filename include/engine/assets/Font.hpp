@@ -2,6 +2,16 @@
 
 #include <memory>
 
+namespace engine::graphics
+{
+
+/// The SFML renderer, which has to reach the platform font in order to draw with
+/// it. Declared here only so a handle can name it as a friend; nothing about it
+/// reaches this header.
+class SfmlRenderer;
+
+} // namespace engine::graphics
+
 namespace engine::assets
 {
 
@@ -21,19 +31,26 @@ class SfmlAssetManager;
 /// from. It is the font half of the pair that begins with [Texture](Texture.hpp),
 /// and it obeys the same rules for the same reasons.
 ///
-/// ### Scope: loaded and cached, never drawn
+/// ### Scope: loaded, cached, and drawn
 ///
-/// Phase 10 deliberately goes no further than loading and caching fonts. There
-/// is no text rendering here, no draw call, and no measurement API, because there
-/// is no consumer for one yet. Inventing a text interface now, before anything
-/// needs to place a glyph, would mean guessing at questions this engine has not
-/// been asked: what anchors text, how it wraps, what order it draws in relative
-/// to sprites. Those questions deserve answers shaped by a real requirement.
+/// Phase 10 stopped at loading and caching, deliberately: there was no consumer for
+/// a drawing surface, and inventing one would have meant guessing at questions the
+/// engine had not been asked - what anchors text, how it wraps, what order it draws
+/// in relative to sprites.
 ///
-/// What that leaves is still useful and fully testable: whether a font file
-/// parsed, how many glyphs it carries, and whether a cached name really is the
-/// same object as the one loaded before. So this type exists now, and its
-/// rendering surface is deferred to a phase that has a reason to design it.
+/// Phase 14 answers those from evidence rather than guesswork. The course
+/// reference draws its grid overlay at world pixel coordinates, so text joins the
+/// same world-to-screen path as every other renderable; and the engine already has
+/// one rule for where a thing sits relative to its position - the centre, from
+/// Lecture 11 section 5 - so text follows it rather than inventing a second anchor.
+/// The renderer, not this type, is where that is decided; see
+/// [engine::graphics::Renderer::drawText].
+///
+/// What this type still deliberately does not have is a measurement API. Nothing
+/// needs to ask a font how wide a string is from outside the renderer: the renderer
+/// measures the string it was handed, at the size it was asked for, which is the
+/// only way to get an answer that matches what is actually drawn. An engine-level
+/// `measure()` would duplicate the renderer's reasoning and could disagree with it.
 ///
 /// ### The public API is free of SFML
 ///
@@ -122,6 +139,14 @@ private:
     /// meaning "empty, or holding exactly what was loaded for it" instead of
     /// "anything with a pointer to an implementation can reach in and set it".
     friend class SfmlAssetManager;
+
+    /// The renderer, which has to reach the platform font to draw a string with it
+    /// - the same second friend [Texture](Texture.hpp) has, for the same reason.
+    /// Between them the two are the *only* ways in: the loader, which fills a
+    /// handle with something it loaded, and the renderer, which reads that
+    /// something to draw it. A third would be a new kind of access rather than a
+    /// new kind of caller, so there is not one.
+    friend class graphics::SfmlRenderer;
 
     /// The opaque implementation. Defined with the concrete graphics type in a
     /// private header, and never named here, so its contents stay private.

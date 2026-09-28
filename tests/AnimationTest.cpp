@@ -154,6 +154,15 @@ public:
         m_draws.push_back(DrawCall{&texture, placement, source, source.has_value() ? "region" : "whole"});
     }
 
+    // Phase 14 added a text draw to the Renderer interface. This double records
+    // nothing but texture draws, because nothing in this file draws a string, so
+    // the method exists to keep the double concrete and is otherwise empty - the
+    // same treatment `drawRectangle` already gets here.
+    void drawText(const engine::assets::Font&, const std::string&, std::uint32_t, const engine::Color&,
+                  const RenderTransform&) override
+    {
+    }
+
     void endFrame() override { ++m_frames; }
 
     [[nodiscard]] std::uint64_t frameCount() const noexcept override { return m_frames; }

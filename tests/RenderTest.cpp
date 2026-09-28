@@ -74,6 +74,21 @@ struct TextureDrawCall
     std::optional<engine::IntRect> source;
 };
 
+/// A recorded text draw.
+///
+/// Records the font handle by address for the same reason `TextureDrawCall` does:
+/// a handle is non-copyable by design, and identity is the thing worth asserting.
+/// The string, the size and the colour are recorded by value because they are what
+/// a system is supposed to have passed through unchanged.
+struct TextDrawCall
+{
+    const engine::assets::Font* font = nullptr;
+    std::string content;
+    std::uint32_t characterSize = 0;
+    engine::Color color{};
+    engine::graphics::RenderTransform placement;
+};
+
 class RecordingRenderer final : public engine::graphics::Renderer
 {
 public:
@@ -106,12 +121,21 @@ public:
         m_order.emplace_back(source.has_value() ? "texture-region" : "texture");
     }
 
+    void drawText(const engine::assets::Font& font, const std::string& content,
+                  const std::uint32_t characterSize, const engine::Color& color,
+                  const engine::graphics::RenderTransform& placement) override
+    {
+        m_textDraws.push_back(TextDrawCall{&font, content, characterSize, color, placement});
+        m_order.emplace_back("text");
+    }
+
     void endFrame() override { ++m_endFrames; }
 
     [[nodiscard]] std::uint64_t frameCount() const noexcept override { return m_endFrames; }
 
     [[nodiscard]] const std::vector<DrawCall>& draws() const noexcept { return m_draws; }
     [[nodiscard]] const std::vector<TextureDrawCall>& textureDraws() const noexcept { return m_textureDraws; }
+    [[nodiscard]] const std::vector<TextDrawCall>& textDraws() const noexcept { return m_textDraws; }
     [[nodiscard]] const std::vector<std::string>& order() const noexcept { return m_order; }
     [[nodiscard]] bool cleared() const noexcept { return m_cleared; }
     [[nodiscard]] const engine::Color& clearColor() const noexcept { return m_clearColor; }
@@ -122,6 +146,7 @@ public:
     {
         m_draws.clear();
         m_textureDraws.clear();
+        m_textDraws.clear();
         m_order.clear();
         m_cleared = false;
         m_beginFrames = 0;
@@ -131,6 +156,7 @@ public:
 private:
     std::vector<DrawCall> m_draws;
     std::vector<TextureDrawCall> m_textureDraws;
+    std::vector<TextDrawCall> m_textDraws;
     std::vector<std::string> m_order;
     engine::Color m_clearColor{};
     std::size_t m_beginFrames = 0;
@@ -1236,6 +1262,16 @@ void testARendererWithoutSfmlStillSatisfiesTheInterface()
         void drawRectangle(const Vec2&, const Color&, const graphics::RenderTransform&) override {}
         void drawTexture(const assets::Texture&, const graphics::RenderTransform&,
                          const std::optional<engine::IntRect>&) override
+        {
+        }
+        // Phase 14 added a text draw, and the point of this group is that the whole
+        // interface can be implemented with no graphics library in reach. A font
+        // handle, a string, an integer, a colour and a placement are all this
+        // engine's own types, so implementing the text draw here needs nothing
+        // extra - which is the property being asserted, now for five methods instead
+        // of four.
+        void drawText(const assets::Font&, const std::string&, std::uint32_t, const Color&,
+                      const graphics::RenderTransform&) override
         {
         }
         void endFrame() override {}

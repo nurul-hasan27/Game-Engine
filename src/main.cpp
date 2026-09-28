@@ -3,6 +3,7 @@
 #include "engine/components/Body.hpp"
 #include "engine/components/Collider.hpp"
 #include "engine/components/Rectangle.hpp"
+#include "engine/components/Text.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/EngineConfig.hpp"
 #include "engine/graphics/Camera.hpp"
@@ -35,6 +36,7 @@ using engine::components::Animation;
 using engine::components::Body;
 using engine::components::Collider;
 using engine::components::Rectangle;
+using engine::components::Text;
 using engine::components::Transform;
 using engine::ecs::Entity;
 using engine::ecs::EntityManager;
@@ -96,6 +98,32 @@ public:
 private:
     Camera* m_camera = nullptr;
 };
+/// Adds one string to the world, centred on `position`.
+///
+/// The smallest complete text entity there is: a `Transform` for where it is and a
+/// `Text` for what it says. Two components, no scene, no overlay, no framework -
+/// which is the whole point of Phase 14 being about the engine's ability to render
+/// a string rather than about a user interface.
+///
+/// The font is named, never held: a component refers to an asset the way every other
+/// component in this engine does, and the resolution happens at draw time. That is
+/// why this function needs no asset manager argument at all.
+void addTextLabel(EntityManager& world, std::string content, const Vec2 position = Vec2{64.0F, 736.0F})
+{
+    Entity& label = world.addEntity("level.label");
+    label.addComponent<Transform>(Transform{position, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+
+    // `fonts_pixeled` because this is a pixel-art platformer and the reference's own
+    // menu uses the same font. A character size of 12 because that is the size the
+    // course reference draws its debug text at, so this label is the same kind of
+    // thing the course asked for rather than a new invention.
+    Text text;
+    text.content = std::move(content);
+    text.fontAssetName = "fonts_pixeled";
+    text.characterSize = 12U;
+    label.addComponent<Text>(text);
+}
+
 /// How tall the game's world is, in 64-pixel cells.
 ///
 /// **The level format has no height field**, so this cannot come from the level
@@ -200,8 +228,22 @@ void buildLevel(EntityManager& world, SystemManager& systems, Camera& camera,
                   << "the world.\n";
     }
 
+    // A label proving the text path end to end, through the real font, the real
+    // renderer and a real window.
+    //
+    // Deliberately an **entity with a Text component and nothing else**, placed with
+    // its own Transform, so it exercises exactly the path a later UI phase will use
+    // and nothing about the level format. It is not a debug overlay and not a menu:
+    // this engine has no scenes, and adding a scene to hold a string would be the
+    // wrong shape for a demonstration.
+    //
+    // The content is read from the level file's own player spawn, so it is
+    // information the level really carries rather than a hardcoded caption.
+    addTextLabel(world, std::string{"SPAWN "} + std::to_string(static_cast<int>(loadedLevel.player().gridX)) + "," +
+                        std::to_string(static_cast<int>(loadedLevel.player().gridY)));
+
     std::cerr << "Loaded " << loadedLevel.tiles().size() << " tiles, " << loadedLevel.decorations().size()
-              << " decorations and 1 player (" << spawned << " entities).\n";
+              << " decorations, 1 player and 1 text label (" << spawned + 1 << " entities).\n";
 }
 
 /// Reads the optional `--frames <count>` argument.

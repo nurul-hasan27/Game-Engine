@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/Color.hpp"
+#include "engine/assets/Font.hpp"
 #include "engine/assets/Texture.hpp"
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/math/IntRect.hpp"
@@ -8,6 +9,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace engine::graphics
 {
@@ -101,6 +103,42 @@ public:
     ///        should not be able to crash the renderer.
     virtual void drawTexture(const assets::Texture& texture, const RenderTransform& placement,
                              const std::optional<IntRect>& source) = 0;
+
+    /// Draws a string in `font`, at `characterSize` points, in `color`.
+    ///
+    /// ### Why this takes a font handle and a string rather than a text object
+    ///
+    /// A graphics library's own text type would carry the string, the font, the
+    /// size, the colour, the alignment, the origin and the style, and would be able
+    /// to be drawn with one call. Passing it would be one parameter instead of five,
+    /// and it would put a graphics type in this header - which is the one thing this
+    /// interface does not do, and the reason [assets::Texture](assets/Texture.hpp)
+    /// is a handle rather than an `sf::Texture` for the same reason.
+    ///
+    /// So the pieces come separately, each as a type this engine already owns:
+    /// [assets::Font](assets/Font.hpp), [std::string](string), a
+    /// [Color](Color.hpp) and a [RenderTransform](graphics/RenderTransform.hpp).
+    /// Nothing here is SFML, and a caller can be written, compiled and tested with
+    /// the graphics library nowhere in reach.
+    ///
+    /// ### What an implementation must guarantee
+    ///
+    /// - **Position is the centre**, as it is for `drawRectangle` and `drawTexture`.
+    ///   The engine's rule from Lecture 11 section 5 is that a position is the
+    ///   middle of the thing drawn, and a string that hung off its top-left corner
+    ///   would be the one renderable in the engine that disagreed.
+    /// - **Centring is measured, not assumed.** A string's extent depends on its
+    ///   content, its font and its size, and differs between fonts. An
+    ///   implementation has to measure the string it was given rather than
+    ///   inferring an origin from the size alone.
+    /// - **The placement is composed the same way as every other draw**, so text
+    ///   moves, scales and rotates with the same transform a sprite would.
+    /// - **An empty `content` draws nothing** and is not an error.
+    /// - **An empty font handle is an error**, not a silent no-op, matching
+    ///   `drawTexture`: a string that silently fails to appear is a bug that
+    ///   surfaces much later with nothing pointing at the cause.
+    virtual void drawText(const assets::Font& font, const std::string& content, std::uint32_t characterSize,
+                          const Color& color, const RenderTransform& placement) = 0;
 
     /// Finishes the frame and presents it to the window.
     virtual void endFrame() = 0;

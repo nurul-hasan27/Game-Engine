@@ -40,6 +40,9 @@ public:
     void drawRectangle(const Vec2& size, const Color& color, const RenderTransform& placement) override;
     void drawTexture(const assets::Texture& texture, const RenderTransform& placement,
                      const std::optional<IntRect>& source) override;
+
+    void drawText(const assets::Font& font, const std::string& content, std::uint32_t characterSize,
+                  const Color& color, const RenderTransform& placement) override;
     void endFrame() override;
 
     [[nodiscard]] std::uint64_t frameCount() const noexcept override { return m_frameCount; }
