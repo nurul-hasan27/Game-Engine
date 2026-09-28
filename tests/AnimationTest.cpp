@@ -1555,6 +1555,164 @@ void testTheApplicationManagerIsReusedForBothSteps()
     CHECK(definition.frameHeight() == static_cast<int>(size.y));
 }
 
+// ---------------------------------------------------------------------------
+// The SFML boundary
+//
+// The new public headers are checked from source, because nothing about a
+// component's or a system's *behaviour* can reveal that it names a graphics type.
+// Comments are stripped first, and that is not a nicety: several of these files
+// name `sf::Sprite`, `sf::IntRect` or `SFML` while explaining that they never
+// expose one, and a raw scan would match its own explanation.
+// ---------------------------------------------------------------------------
+
+/// Strips `//` comments and blank lines, leaving only code.
+[[nodiscard]] std::string codeOf(const char* const path)
+{
+    std::ifstream file{path};
+    if (!file)
+    {
+        std::cerr << "    unable to read source file: " << path << '\n';
+        ++g_failureCount;
+        return {};
+    }
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+
+    std::istringstream lines{buffer.str()};
+    std::string code;
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        const std::string withoutComment = line.substr(0, line.find("//"));
+        if (withoutComment.find_first_not_of(" \t") != std::string::npos)
+        {
+            code += withoutComment;
+            code += '\n';
+        }
+    }
+
+    return code;
+}
+
+void testTheAnimationComponentHeaderNamesNoGraphicsType()
+{
+    const std::string code = codeOf(ENGINE_ANIMATION_COMPONENT_HEADER);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    CHECK(code.find("sf::") == std::string::npos);
+    CHECK(code.find("SFML") == std::string::npos);
+    CHECK(code.find("#include <SFML") == std::string::npos);
+
+    // Only the standard headers a component needs: a string for the name and a
+    // fixed-width integer for the counters. Nothing else.
+    CHECK(code.find("#include <string>") != std::string::npos);
+    CHECK(code.find("#include <cstdint>") != std::string::npos);
+    CHECK(code.find("#include") != std::string::npos);
+}
+
+void testTheAnimationComponentHoldsNoResource()
+{
+    const std::string code = codeOf(ENGINE_ANIMATION_COMPONENT_HEADER);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    // No asset type either. The component names an animation; it does not hold one.
+    // An `assets::Animation` member would be a copy per entity of something every
+    // entity shares, and an `assets::Texture` would drag the graphics library in.
+    CHECK(code.find("assets::") == std::string::npos);
+    CHECK(code.find("Texture") == std::string::npos);
+    CHECK(code.find("Font") == std::string::npos);
+    CHECK(code.find("IntRect") == std::string::npos);
+    CHECK(code.find("Vec2") == std::string::npos);
+}
+
+void testTheAnimationSystemHeaderNamesNoGraphicsType()
+{
+    const std::string code = codeOf(ENGINE_ANIMATION_SYSTEM_HEADER);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    // The system names the asset *interface*, which is SFML-free by construction,
+    // and nothing else graphics.
+    CHECK(code.find("sf::") == std::string::npos);
+    CHECK(code.find("SFML") == std::string::npos);
+    CHECK(code.find("Sprite") == std::string::npos);
+    CHECK(code.find("IntRect") == std::string::npos);
+    CHECK(code.find("Texture") == std::string::npos);
+}
+
+void testTheAnimationSystemSourceNamesNoGraphicsType()
+{
+    // The .cpp too. A system that reached into SFML would compile fine and would
+    // break the moment the engine was pointed at a different graphics library.
+    const std::string code = codeOf(ENGINE_ANIMATION_SYSTEM_SOURCE);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    CHECK(code.find("sf::") == std::string::npos);
+    CHECK(code.find("SFML") == std::string::npos);
+    CHECK(code.find("Sprite") == std::string::npos);
+}
+
+void testTheRenderSystemNamesNoGraphicsType()
+{
+    // It gained a query and a source rectangle, and neither may have brought a
+    // graphics type along.
+    const std::string code = codeOf(ENGINE_RENDER_SYSTEM_SOURCE);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    CHECK(code.find("sf::") == std::string::npos);
+    CHECK(code.find("SFML") == std::string::npos);
+    CHECK(code.find("Sprite") == std::string::npos);
+
+    // It uses the engine's own rect, not a graphics one.
+    CHECK(code.find("IntRect") != std::string::npos);
+}
+
+void testTheRenderSystemDoesNotOwnPlaybackState()
+{
+    // The render query reads the frame and nothing else. If it advanced the
+    // component as well, an animation would move twice per game frame and its rate
+    // would depend on how many systems happened to look at it.
+    const std::string code = codeOf(ENGINE_RENDER_SYSTEM_SOURCE);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    CHECK(code.find("advanceAnimation") == std::string::npos);
+    CHECK(code.find("currentFrame =") == std::string::npos);
+    CHECK(code.find("ticksOnFrame") == std::string::npos);
+
+    // But it does read the frame, to select the region.
+    CHECK(code.find("animation.currentFrame") != std::string::npos);
+}
+
 } // namespace
 
 int main()
@@ -1615,6 +1773,12 @@ int main()
         {"every shipped animation has a usable frame", &testEveryShippedAnimationHasAUsableFrame},
         {"an animated entity runs through the application", &testAnAnimatedEntityRunsThroughTheApplication},
         {"a finished animation is removed by the application", &testAFinishedAnimationIsRemovedByTheApplication},
+        {"the animation component header names no graphics type", &testTheAnimationComponentHeaderNamesNoGraphicsType},
+        {"the animation component holds no resource", &testTheAnimationComponentHoldsNoResource},
+        {"the animation system header names no graphics type", &testTheAnimationSystemHeaderNamesNoGraphicsType},
+        {"the animation system source names no graphics type", &testTheAnimationSystemSourceNamesNoGraphicsType},
+        {"the render system names no graphics type", &testTheRenderSystemNamesNoGraphicsType},
+        {"the render system does not own playback state", &testTheRenderSystemDoesNotOwnPlaybackState},
         {"the application manager is reused for both steps", &testTheApplicationManagerIsReusedForBothSteps},
     };
 

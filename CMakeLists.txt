@@ -272,7 +272,11 @@ if(ENGINE_BUILD_TESTS)
     target_link_libraries(animation_test PRIVATE engine)
     target_compile_options(animation_test PRIVATE ${ENGINE_WARNING_FLAGS})
     target_compile_definitions(animation_test PRIVATE
-        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt")
+        ENGINE_ASSET_CONFIG="${PROJECT_SOURCE_DIR}/assets/assets.txt"
+        ENGINE_ANIMATION_COMPONENT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/components/Animation.hpp"
+        ENGINE_ANIMATION_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/AnimationSystem.hpp"
+        ENGINE_ANIMATION_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/AnimationSystem.cpp"
+        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp")
     add_test(NAME animation.playback COMMAND animation_test)
     set_tests_properties(animation.playback PROPERTIES TIMEOUT 120)
 
