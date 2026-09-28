@@ -897,8 +897,15 @@ void testSpeedIndependentOfFrameCount()
 
         for (int frame = 0; frame < frames; ++frame)
         {
+            // Application's order, in miniature: translate this frame's keys, run
+            // the systems, then cross the frame boundary. Without the
+            // `beginFrame()` the key would look freshly pressed on *every*
+            // iteration, and this test would not be able to tell a held key from a
+            // tapped one - which is the distinction the whole action layer exists
+            // to make.
             actions.update(defaultActionMap(), input);
-    systems.update(manager, actions, each);
+            systems.update(manager, actions, each);
+            input.beginFrame();
         }
         return transformOf(player).position.x;
     };

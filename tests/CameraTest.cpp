@@ -522,8 +522,12 @@ void testCameraFollowsMovement()
     input.processKeyDown(Key::D);
     for (int frame = 0; frame < 120; ++frame)
     {
+        // Application's order in miniature, including the frame boundary. Without
+        // it the pressed key would look freshly pressed on every iteration, and
+        // this loop could not distinguish a held key from a tapped one.
         actions.update(defaultActionMap(), input);
-    systems.update(world, actions, 1.0F / 60.0F);
+        systems.update(world, actions, 1.0F / 60.0F);
+        input.beginFrame();
     }
 
     // Two seconds at 300 px/s.

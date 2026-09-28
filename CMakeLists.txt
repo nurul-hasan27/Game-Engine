@@ -298,6 +298,7 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_ACTION_MAP_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/input/ActionMap.cpp"
         ENGINE_ACTION_STATE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/input/ActionState.cpp"
         ENGINE_SFML_KEY_MAP_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/input/SfmlKeyMap.cpp"
+        ENGINE_APPLICATION_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/Application.cpp"
         ENGINE_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/ecs/System.hpp"
         ENGINE_MOVEMENT_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/MovementSystem.hpp"
         ENGINE_MOVEMENT_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/MovementSystem.cpp")

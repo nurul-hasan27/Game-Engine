@@ -424,9 +424,47 @@ void testAnInvalidActionIsIgnoredEverywhere()
     CHECK_FALSE(map.isBound(Action::Count));
 
     // And the action it would have clobbered is untouched.
+    //
+    // Both the *first key* and the *count* are checked, and both are needed. A
+    // mutation that redirected an invalid action at another action's slot would
+    // leave the first key alone and only add a spurious second binding, so the
+    // count is what actually catches it.
     map.registerAction(Action::MoveLeft, Key::A);
+    const std::size_t before = map.bindingCount(Action::MoveLeft);
+
     map.registerAction(Action::Count, Key::D);
+    map.registerAction(Action::Count, Key::A, Key::D);
+
     CHECK(map.keyAt(Action::MoveLeft, 0U) == Key::A);
+    CHECK(map.bindingCount(Action::MoveLeft) == before);
+    CHECK(map.bindingCount(Action::MoveLeft) == 1U);
+}
+
+void testABindingToAnUntrackableKeyIsNotABinding()
+{
+    // `Key::Unknown` is untrackable, so a binding naming it can never fire. The map
+    // has to say so, or "has a binding" and "can ever fire" would be different
+    // questions and a consumer could not tell which it was asking.
+    ActionMap map;
+    map.registerAction(Action::MoveLeft, Key::Unknown);
+
+    // The registration is stored - `registerAction` adds, and does not judge - but
+    // the action is not bound.
+    CHECK(map.bindingCount(Action::MoveLeft) == 1U);
+    CHECK(map.keyAt(Action::MoveLeft, 0U) == Key::Unknown);
+    CHECK_FALSE(map.isBound(Action::MoveLeft));
+
+    // And `hasAnyBinding` agrees, so a map of nothing trackable is a map with
+    // nothing bound.
+    CHECK_FALSE(map.hasAnyBinding());
+
+    // The state agrees too, which is the part a consumer can observe.
+    Input input;
+    input.processKeyDown(Key::Unknown);
+    ActionState actions;
+    actions.update(map, input);
+    CHECK_FALSE(actions.isActive(Action::MoveLeft));
+    CHECK_FALSE(actions.anyActionActive());
 }
 
 void testCopiesAreIndependent()
@@ -1273,6 +1311,55 @@ void testTheApplicationOwnsTheDefaultMapping()
     CHECK_FALSE(application.actions().anyActionActive());
 }
 
+void testTheApplicationBuildsTheSnapshotOncePerFrame()
+{
+    // The one contract no runtime group can observe.
+    //
+    // `Application` owns a private `Input`, so a test cannot press a key into it,
+    // and a headless run presses none. A snapshot that was never built and a
+    // snapshot built from an untouched keyboard are both all-false, so every
+    // behavioural group passes either way - which means the *removal* of the
+    // translation is undetectable from the outside.
+    //
+    // The contract is therefore checked where it is written: the translation is in
+    // `Application::update`, exactly once, and it is not in `render()`. Comments
+    // are stripped first so this does not match the prose explaining the ordering.
+    const std::string source = codeOf(ENGINE_APPLICATION_SOURCE);
+
+    CHECK(!source.empty());
+    if (source.empty())
+    {
+        return;
+    }
+
+    // Exactly one translation in the whole file, so it cannot be duplicated into
+    // a second call site.
+    std::size_t occurrences = 0U;
+    const std::string needle = "m_actions.update(m_actionMap, m_input)";
+    for (std::size_t at = source.find(needle); at != std::string::npos; at = source.find(needle, at + 1))
+    {
+        ++occurrences;
+    }
+    CHECK(occurrences == 1U);
+
+    // And it precedes the system update, so every system sees this frame's
+    // snapshot rather than last frame's.
+    const std::size_t translate = source.find(needle);
+    const std::size_t systems = source.find("m_systemManager.update(");
+    CHECK(translate != std::string::npos);
+    CHECK(systems != std::string::npos);
+    if (translate != std::string::npos && systems != std::string::npos)
+    {
+        CHECK(translate < systems);
+    }
+
+    // The render pass is handed the same snapshot, never the raw keyboard.
+    CHECK(source.find("m_renderSystem.update(m_entityManager, m_actions,") != std::string::npos);
+    CHECK(source.find("m_renderSystem.update(m_entityManager, m_input,") == std::string::npos);
+    CHECK(source.find("m_systemManager.update(m_entityManager, m_actions,") != std::string::npos);
+    CHECK(source.find("m_systemManager.update(m_entityManager, m_input,") == std::string::npos);
+}
+
 void testTheApplicationRunsWithActionsInTheLoop()
 {
     // The real loop, with a real window, running the real systems. Reaching
@@ -1336,6 +1423,7 @@ int main()
         {"unregistering clears the bindings", &testUnregisteringClearsTheBindings},
         {"clear unbinds everything", &testClearUnbindsEverything},
         {"an invalid action is ignored everywhere", &testAnInvalidActionIsIgnoredEverywhere},
+        {"a binding to an untrackable key is not a binding", &testABindingToAnUntrackableKeyIsNotABinding},
         {"copies are independent", &testCopiesAreIndependent},
         {"the static factory agrees with the free function", &testTheStaticFactoryAgreesWithTheFreeFunction},
         {"the assignment three movement bindings", &testTheAssignmentThreeMovementBindings},
@@ -1376,6 +1464,7 @@ int main()
         {"an unmapped window key stays inert", &testAnUnmappedWindowKeyStaysInert},
         {"a window close is not a keyboard action", &testAWindowCloseIsNotAKeyboardAction},
         {"the application owns the default mapping", &testTheApplicationOwnsTheDefaultMapping},
+        {"the application builds the snapshot once per frame", &testTheApplicationBuildsTheSnapshotOncePerFrame},
         {"the application runs with actions in the loop", &testTheApplicationRunsWithActionsInTheLoop},
         {"the application keeps raw keys and actions apart", &testTheApplicationKeepsRawKeysAndActionsApart},
     };
