@@ -5,6 +5,9 @@
 #include "engine/input/Input.hpp"
 #include "engine/input/SfmlKeyMap.hpp"
 #include "engine/math/Vec2.hpp"
+#include "engine/input/Action.hpp"
+#include "engine/input/ActionMap.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/systems/MovementSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
 
@@ -32,6 +35,10 @@ using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::input::Input;
 using engine::input::Key;
+using engine::input::Action;
+using engine::input::ActionMap;
+using engine::input::ActionState;
+using engine::input::defaultActionMap;
 using engine::systems::MovementSystem;
 using engine::systems::PhysicsSystem;
 
@@ -413,8 +420,21 @@ Entity& makeMover(EntityManager& manager, const Vec2& position = Vec2{0.0F, 0.0F
     return entity;
 }
 
-/// One frame of the real chain: MovementSystem turns input into velocity, then
-/// PhysicsSystem integrates that velocity into position.
+/// This frame's action snapshot, built exactly the way `Application` builds it.
+///
+/// The default bindings, applied to the raw keyboard state. Going through the real
+/// translation rather than hand-setting an action is deliberate: these groups
+/// press *keys*, and the thing worth proving is that pressing the right key is
+/// what makes the right action fire.
+[[nodiscard]] ActionState actionsFrom(const Input& input)
+{
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    return actions;
+}
+
+/// One frame of the real chain: the keyboard becomes actions, MovementSystem turns
+/// actions into velocity, then PhysicsSystem integrates that velocity into position.
 ///
 /// Phase 7's tests drove MovementSystem alone and asserted where the body ended
 /// up, because MovementSystem moved position itself. Since Phase 8 it does not:
@@ -422,11 +442,17 @@ Entity& makeMover(EntityManager& manager, const Vec2& position = Vec2{0.0F, 0.0F
 /// Application does, and every assertion below is unchanged from Phase 7. That
 /// is the point of the refactor, and these are the tests that prove it: the
 /// observable result of holding a key is the same as it always was.
+///
+/// Phase 12 added the first step. MovementSystem no longer receives the keyboard,
+/// so a key press now has to travel through the binding table to reach it - which
+/// is the behaviour the phase exists to introduce, and these assertions are
+/// deliberately untouched by it.
 void stepFrame(EntityManager& manager, MovementSystem& movement, Input& input, const float deltaSeconds)
 {
     PhysicsSystem physics;
-    movement.update(manager, input, deltaSeconds);
-    physics.update(manager, input, deltaSeconds);
+    const ActionState actions = actionsFrom(input);
+    movement.update(manager, actions, deltaSeconds);
+    physics.update(manager, actions, deltaSeconds);
 }
 
 void testNoInputMeansNoMovement()
@@ -441,7 +467,11 @@ void testNoInputMeansNoMovement()
 
     Entity& entity = makeMover(manager);
 
-    systems.update(manager, input, 1.0F);
+    // Nothing is pressed, so the snapshot is all-false and the systems see no
+    // action at all. The translation still runs: "no keys down" is a real frame,
+    // not an absent one.
+    const ActionState actions = actionsFrom(input);
+    systems.update(manager, actions, 1.0F);
 
     CHECK(entity.getComponent<Transform>().position == Vec2(0.0F, 0.0F));
 }
@@ -655,7 +685,7 @@ void testMovementSetsVelocity()
     input.processKeyDown(Key::D);
     // MovementSystem alone, with no physics in the loop, so this really is
     // measuring its output and not the whole chain's.
-    movement.update(manager, input, 1.0F);
+    movement.update(manager, actionsFrom(input), 1.0F);
 
     const Transform& transform = entity.getComponent<Transform>();
     // Velocity is per second, and does not depend on the frame length.
@@ -784,21 +814,26 @@ void testReleasingKeysStopsMovement()
 // Integration: Input through SystemManager, alongside other systems
 // ---------------------------------------------------------------------------
 
-/// A test-only system that reacts to a single press rather than to holding,
-/// proving pressed and down are genuinely different questions.
+/// A test-only system that reacts to a single press rather than to holding.
+///
+/// It asks `wasPressed(Action::Shoot)` and cannot ask about a key at all, which is
+/// what the system interface now guarantees. Assignment 3 requires exactly this
+/// distinction for shooting and for jumping - *"it should only jump once per button
+/// press"* - and asking the wrong question would fire the action every frame the
+/// key is held.
 class JumpOnPressSystem final : public engine::ecs::System
 {
 public:
     explicit JumpOnPressSystem(int& jumps) : m_jumps{&jumps} {}
 
-    void update(EntityManager& entities, Input& input, const float deltaSeconds) override
+    void update(EntityManager& entities, const ActionState& actions, const float deltaSeconds) override
     {
         static_cast<void>(deltaSeconds);
 
         for (auto&& [entity, transform] : entities.query<Transform>())
         {
             static_cast<void>(entity);
-            if (input.isKeyPressed(Key::Space))
+            if (actions.wasPressed(Action::Shoot))
             {
                 transform.position.y -= 50.0F;
                 ++(*m_jumps);
@@ -822,11 +857,17 @@ void testPressedAndDownDifferForGameplay()
 
     Entity& entity = makeMover(manager);
 
+    const ActionMap map = defaultActionMap();
+    ActionState actions;
+
     // Hold space across five frames: held, but pressed only on the first.
     input.processKeyDown(Key::Space);
     for (int frame = 0; frame < 5; ++frame)
     {
-        systems.update(manager, input, 0.016F);
+        // Translation first, exactly as Application orders it, so `wasPressed` is
+        // this frame's edge rather than a value left over from the last one.
+        actions.update(map, input);
+        systems.update(manager, actions, 0.016F);
         if (frame > 0)
         {
             // The operating system repeats the press; it must not re-trigger.
@@ -851,9 +892,11 @@ void testSystemsShareTheSameInputObject()
     makeMover(manager);
 
     // Movement is driven by the same Input the test holds, with no path through
-    // Application and no global in between.
+    // Application and no global in between. The one translation every system
+    // shares happens before the loop, so all of them see one snapshot.
     input.processKeyDown(Key::D);
-    systems.update(manager, input, 1.0F);
+    const ActionState actions = actionsFrom(input);
+    systems.update(manager, actions, 1.0F);
 
     CHECK(manager.query<Transform>().size() == 1);
 }
@@ -870,12 +913,17 @@ void testMovementAndOtherSystemsCompose()
 
     Entity& entity = makeMover(manager);
 
+    const ActionMap map = defaultActionMap();
+    ActionState actions;
+
     // Several frames with the key held, released partway.
     input.processKeyDown(Key::D);
-    systems.update(manager, input, 0.5F);
+    actions.update(map, input);
+    systems.update(manager, actions, 0.5F);
     input.processKeyUp(Key::D);
     nextFrame(input);
-    systems.update(manager, input, 0.5F);
+    actions.update(map, input);
+    systems.update(manager, actions, 0.5F);
 
     // Only the frames where the key was down moved it.
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 50.0F);

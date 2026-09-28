@@ -167,6 +167,8 @@ add_library(engine STATIC
             src/engine/ecs/EntityView.cpp
             src/engine/ecs/SystemManager.cpp
             src/engine/graphics/SfmlRenderer.cpp
+            src/engine/input/ActionMap.cpp
+            src/engine/input/ActionState.cpp
             src/engine/input/SfmlKeyMap.cpp
             src/engine/math/Vec2.cpp
             src/engine/systems/AnimationSystem.cpp

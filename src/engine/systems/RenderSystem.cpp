@@ -11,11 +11,11 @@
 namespace engine::systems
 {
 
-void RenderSystem::update(engine::ecs::EntityManager& entities, input::Input& input, const float deltaSeconds)
+void RenderSystem::update(engine::ecs::EntityManager& entities, const input::ActionState& actions, const float deltaSeconds)
 {
     // Drawing is not time dependent and does not read the keyboard. Both
     // parameters are accepted only so every system shares one signature.
-    static_cast<void>(input);
+    static_cast<void>(actions);
     static_cast<void>(deltaSeconds);
 
     // ---- Query 1: rectangles -------------------------------------------------

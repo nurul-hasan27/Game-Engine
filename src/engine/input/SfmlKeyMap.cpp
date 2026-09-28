@@ -31,6 +31,14 @@ Key toEngineKey(const sf::Keyboard::Key key) noexcept
             return Key::Z;
         case sf::Keyboard::X:
             return Key::X;
+        case sf::Keyboard::P:
+            return Key::P;
+        case sf::Keyboard::T:
+            return Key::T;
+        case sf::Keyboard::C:
+            return Key::C;
+        case sf::Keyboard::G:
+            return Key::G;
         default:
             // Everything else, including sf::Keyboard::Unknown, is not tracked.
             return Key::Unknown;

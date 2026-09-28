@@ -9,13 +9,13 @@
 namespace engine::systems
 {
 
-void CameraSystem::update(engine::ecs::EntityManager& entities, input::Input& input,
+void CameraSystem::update(engine::ecs::EntityManager& entities, const input::ActionState& actions,
                           const float deltaSeconds)
 {
     // Following a target is a consequence of where it is this frame, not of what
     // the player is pressing and not of how long the frame was. Both parameters
     // exist only because every system shares one signature.
-    static_cast<void>(input);
+    static_cast<void>(actions);
     static_cast<void>(deltaSeconds);
 
     // Resolved fresh every frame. See the class documentation: an Entity& is

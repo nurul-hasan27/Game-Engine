@@ -8,6 +8,8 @@
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/input/Input.hpp"
 #include "engine/math/Vec2.hpp"
+#include "engine/input/ActionMap.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/systems/CameraSystem.hpp"
 #include "engine/systems/MovementSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
@@ -35,7 +37,9 @@ using engine::ecs::EntityManager;
 using engine::ecs::SystemManager;
 using engine::graphics::Camera;
 using engine::graphics::RenderTransform;
+using engine::input::ActionState;
 using engine::input::Input;
+using engine::input::defaultActionMap;
 using engine::input::Key;
 using engine::physics::BodyType;
 using engine::systems::CameraSystem;
@@ -490,7 +494,9 @@ void testCameraFollowsTargetPosition()
     addTarget(world, Vec2{1500.0F, 900.0F});
 
     Input input;
-    follow.update(world, input, 1.0F / 60.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
 
     CHECK_NEAR_VEC(camera.position(), Vec2(1500.0F, 900.0F));
 }
@@ -501,6 +507,7 @@ void testCameraFollowsMovement()
     // end up exactly where the player ended up.
     EntityManager world;
     Input input;
+    ActionState actions;
     SystemManager systems;
     Camera camera = cameraAt(Vec2{0.0F, 0.0F});
 
@@ -515,7 +522,8 @@ void testCameraFollowsMovement()
     input.processKeyDown(Key::D);
     for (int frame = 0; frame < 120; ++frame)
     {
-        systems.update(world, input, 1.0F / 60.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F / 60.0F);
     }
 
     // Two seconds at 300 px/s.
@@ -534,7 +542,9 @@ void testCameraDoesNotModifyTheTarget()
     const Transform before = target.getComponent<Transform>();
 
     Input input;
-    follow.update(world, input, 1.0F / 60.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
 
     const Transform& after = target.getComponent<Transform>();
     CHECK(after.position == before.position);
@@ -554,7 +564,9 @@ void testCameraWithMissingTargetKeepsItsPosition()
     CameraSystem follow{camera, "player"};
 
     Input input;
-    follow.update(world, input, 1.0F / 60.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
 
     CHECK_NEAR_VEC(camera.position(), Vec2(321.0F, 654.0F));
 }
@@ -571,17 +583,21 @@ void testCameraWithDeadTargetKeepsItsPosition()
     Entity& target = addTarget(world, Vec2{500.0F, 500.0F});
 
     Input input;
-    follow.update(world, input, 1.0F / 60.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
     CHECK_NEAR_VEC(camera.position(), Vec2(500.0F, 500.0F));
 
     world.destroyEntity(target);
-    follow.update(world, input, 1.0F / 60.0F);
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
 
     CHECK_NEAR_VEC(camera.position(), Vec2(500.0F, 500.0F));
 
     // And after the deferred cleanup actually runs, still no crash.
     world.update();
-    follow.update(world, input, 1.0F / 60.0F);
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
     CHECK_NEAR_VEC(camera.position(), Vec2(500.0F, 500.0F));
 }
 
@@ -595,7 +611,9 @@ void testCameraIgnoresTargetWithoutTransform()
     world.addEntity("player"); // no Transform
 
     Input input;
-    follow.update(world, input, 1.0F / 60.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
 
     CHECK_NEAR_VEC(camera.position(), Vec2(7.0F, 9.0F));
 }
@@ -612,7 +630,9 @@ void testCameraFollowsFirstOfDuplicateTags()
     addTarget(world, Vec2{30.0F, 40.0F});
 
     Input input;
-    follow.update(world, input, 1.0F / 60.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
 
     CHECK_NEAR_VEC(camera.position(), Vec2(10.0F, 20.0F));
 }
@@ -628,15 +648,18 @@ void testCameraSurvivesTargetBeingRespawned()
 
     Entity& first = addTarget(world, Vec2{50.0F, 60.0F});
     Input input;
+    ActionState actions;
 
-    follow.update(world, input, 1.0F / 60.0F);
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
     CHECK_NEAR_VEC(camera.position(), Vec2(50.0F, 60.0F));
 
     world.destroyEntity(first);
     world.update();
     addTarget(world, Vec2{700.0F, 800.0F});
 
-    follow.update(world, input, 1.0F / 60.0F);
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1.0F / 60.0F);
     CHECK_NEAR_VEC(camera.position(), Vec2(700.0F, 800.0F));
 }
 
@@ -652,10 +675,13 @@ void testCameraSystemIgnoresInputAndDelta()
     addTarget(world, Vec2{111.0F, 222.0F});
 
     Input input;
-    follow.update(world, input, 0.0F);
+    ActionState actions;
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 0.0F);
     CHECK_NEAR_VEC(camera.position(), Vec2(111.0F, 222.0F));
 
-    follow.update(world, input, 1000.0F);
+    actions.update(defaultActionMap(), input);
+    follow.update(world, actions, 1000.0F);
     CHECK_NEAR_VEC(camera.position(), Vec2(111.0F, 222.0F));
 }
 
@@ -670,6 +696,7 @@ void testCameraRunsAfterPhysics()
     // is what makes it follow this frame's position.
     EntityManager world;
     Input input;
+    ActionState actions;
     SystemManager systems;
     Camera camera = cameraAt(Vec2{0.0F, 0.0F});
 
@@ -682,7 +709,8 @@ void testCameraRunsAfterPhysics()
     player.addComponent<Body>(Body{BodyType::Dynamic});
 
     input.processKeyDown(Key::D);
-    systems.update(world, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F);
 
     // One second at 100 px/s. The camera must see the moved position, not zero.
     CHECK_NEAR(camera.position().x, 100.0F);
@@ -701,6 +729,7 @@ void testCameraRegisteredFirstWouldLagOneFrame()
     const auto runTwoFrames = [](const bool cameraFirst) {
         EntityManager world;
         Input input;
+    ActionState actions;
         SystemManager systems;
         Camera camera = cameraAt(Vec2{0.0F, 0.0F});
 
@@ -723,12 +752,14 @@ void testCameraRegisteredFirstWouldLagOneFrame()
 
         // Frame 1: movement sets velocity, physics moves the player to 100.
         input.processKeyDown(Key::D);
-        systems.update(world, input, 1.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F);
 
         // Frame 2: physics moves the player to 200.
         input.beginFrame();
         input.processKeyDown(Key::D);
-        systems.update(world, input, 1.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F);
 
         return std::pair<float, float>{camera.position().x, player.getComponent<Transform>().position.x};
     };
@@ -763,6 +794,7 @@ void testCollisionIsIdenticalAtAnyCameraPosition()
     const auto run = [](const Vec2& cameraPosition) {
         EntityManager world;
         Input input;
+    ActionState actions;
         SystemManager systems;
         Camera camera = cameraAt(cameraPosition);
 
@@ -781,7 +813,8 @@ void testCollisionIsIdenticalAtAnyCameraPosition()
 
         for (int frame = 0; frame < 60; ++frame)
         {
-            systems.update(world, input, 1.0F / 60.0F);
+            actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F / 60.0F);
         }
 
         const Transform& result = player.getComponent<Transform>();
@@ -813,6 +846,7 @@ void testColliderIsUnaffectedByZoom()
     const auto run = [](const float zoom) {
         EntityManager world;
         Input input;
+    ActionState actions;
         SystemManager systems;
         Camera camera = cameraAt(Vec2{0.0F, 0.0F});
         camera.setZoom(zoom);
@@ -834,7 +868,8 @@ void testColliderIsUnaffectedByZoom()
         // the player must end up resting against it rather than short of it.
         for (int frame = 0; frame < 120; ++frame)
         {
-            systems.update(world, input, 1.0F / 60.0F);
+            actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F / 60.0F);
         }
         return player.getComponent<Transform>().position;
     };
@@ -852,6 +887,7 @@ void testMovementDirectionIsUnaffectedByCamera()
     const auto run = [](const Vec2& cameraPosition, const float zoom) {
         EntityManager world;
         Input input;
+    ActionState actions;
         SystemManager systems;
         Camera camera = cameraAt(cameraPosition);
         camera.setZoom(zoom);
@@ -865,7 +901,8 @@ void testMovementDirectionIsUnaffectedByCamera()
         player.addComponent<Body>(Body{BodyType::Dynamic});
 
         input.processKeyDown(Key::D);
-        systems.update(world, input, 1.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(world, actions, 1.0F);
         return player.getComponent<Transform>().position;
     };
 

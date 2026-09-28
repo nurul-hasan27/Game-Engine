@@ -62,7 +62,7 @@ public:
     ///        unchanged to every system, so all of them see the same value for
     ///        the same frame. Measured by engine::Time; see System for why the
     ///        delta is a parameter rather than something systems look up.
-    void update(EntityManager& entities, input::Input& input, float deltaSeconds);
+    void update(EntityManager& entities, const input::ActionState& actions, float deltaSeconds);
 
 private:
     // unique_ptr so that adding a system does not move the systems already

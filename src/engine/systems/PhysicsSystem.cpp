@@ -18,7 +18,7 @@ using engine::components::Collider;
 using engine::components::Transform;
 using engine::ecs::Entity;
 using engine::ecs::EntityManager;
-using engine::input::Input;
+using engine::input::ActionState;
 using engine::physics::Aabb;
 using engine::physics::BodyType;
 
@@ -62,10 +62,10 @@ void resolveVelocity(Vec2& velocity, const Vec2& correction) noexcept
 
 } // namespace
 
-void PhysicsSystem::update(EntityManager& entities, Input& input, const float deltaSeconds)
+void PhysicsSystem::update(EntityManager& entities, const ActionState& actions, const float deltaSeconds)
 {
     // Physics is a consequence of world velocity, not of this frame's keys.
-    static_cast<void>(input);
+    static_cast<void>(actions);
 
     // ---- 1. integrate ----------------------------------------------------
     // Velocity is integrated for every entity that has a Transform, not only

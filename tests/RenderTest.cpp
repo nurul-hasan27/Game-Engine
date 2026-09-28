@@ -7,6 +7,7 @@
 #include "engine/components/Transform.hpp"
 #include "engine/EngineConfig.hpp"
 #include "engine/ecs/EntityManager.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/graphics/Renderer.hpp"
@@ -153,7 +154,7 @@ using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::graphics::Camera;
 using engine::graphics::RenderTransform;
-using engine::input::Input;
+using engine::input::ActionState;
 using engine::graphics::Renderer;
 using engine::systems::RenderSystem;
 
@@ -233,9 +234,9 @@ private:
 class DriftSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities, engine::input::Input& input, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, const engine::input::ActionState& actions, const float deltaSeconds) override
     {
-        (void)input;
+        (void)actions;
         for (auto&& [entity, transform] : entities.query<engine::components::Transform>())
         {
             (void)entity;
@@ -355,7 +356,7 @@ void testRectangleAggregateConstruction()
 void testRectangleIsStoredOnEntities()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     Entity& entity = manager.addEntity("entity");
 
     entity.addComponent<Transform>();
@@ -460,7 +461,7 @@ void testRenderTransformMapsEverythingAtOnce()
 void testRenderSystemDrawsMatchingEntities()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -470,7 +471,7 @@ void testRenderSystemDrawsMatchingEntities()
     entity.addComponent<Transform>(Transform{Vec2{100.0F, 100.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
     entity.addComponent<Rectangle>(Rectangle{Vec2{40.0F, 20.0F}, Color{1.0F, 0.0F, 0.0F, 1.0F}});
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -485,7 +486,7 @@ void testRenderSystemDrawsMatchingEntities()
 void testRenderSystemIgnoresEntitiesMissingComponents()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -502,7 +503,7 @@ void testRenderSystemIgnoresEntitiesMissingComponents()
     // Neither.
     manager.addEntity("bare");
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().empty());
 }
@@ -510,7 +511,7 @@ void testRenderSystemIgnoresEntitiesMissingComponents()
 void testRenderSystemIgnoresDeadEntities()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -526,7 +527,7 @@ void testRenderSystemIgnoresDeadEntities()
 
     manager.destroyEntity(doomed);
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
 
@@ -534,14 +535,14 @@ void testRenderSystemIgnoresDeadEntities()
     // The recording renderer accumulates, so reset it to count this frame only.
     manager.update();
     renderer.reset();
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
     CHECK(renderer.draws().size() == 1);
 }
 
 void testRenderSystemDrawsManyEntities()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -555,7 +556,7 @@ void testRenderSystemDrawsManyEntities()
         entity.addComponent<Rectangle>();
     }
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().size() == 16);
 }
@@ -563,7 +564,7 @@ void testRenderSystemDrawsManyEntities()
 void testRenderSystemMapsTransformIntoDrawCalls()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -573,7 +574,7 @@ void testRenderSystemMapsTransformIntoDrawCalls()
     entity.addComponent<Transform>(Transform{Vec2{50.0F, 60.0F}, Vec2{0.0F, 0.0F}, Vec2{2.0F, 3.0F}, kPi / 2.0F});
     entity.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -592,7 +593,7 @@ void testRenderSystemAppliesTheCameraToDrawCalls()
     // not the world position it read out of the Transform. A default camera is
     // the identity and would hide a system that ignored the camera entirely.
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     camera.setViewport(Vec2{1280.0F, 720.0F});
@@ -604,7 +605,7 @@ void testRenderSystemAppliesTheCameraToDrawCalls()
     entity.addComponent<Transform>(Transform{Vec2{1100.0F, 500.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
     entity.addComponent<Rectangle>();
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -617,7 +618,7 @@ void testRenderSystemAppliesTheCameraToDrawCalls()
 void testRenderSystemAppliesCameraZoomToDrawCalls()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     camera.setViewport(Vec2{1280.0F, 720.0F});
@@ -631,7 +632,7 @@ void testRenderSystemAppliesCameraZoomToDrawCalls()
     entity.addComponent<Transform>(Transform{Vec2{100.0F, 100.0F}, Vec2{0.0F, 0.0F}, Vec2{3.0F, 3.0F}, 0.0F});
     entity.addComponent<Rectangle>();
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -646,7 +647,7 @@ void testRenderSystemDoesNotModifyTheTransform()
     // A camera changes the picture, never the data. Whatever the camera is doing,
     // the entity's world position and scale come out the other side untouched.
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     camera.setViewport(Vec2{1280.0F, 720.0F});
@@ -660,7 +661,7 @@ void testRenderSystemDoesNotModifyTheTransform()
     entity.addComponent<Rectangle>();
     const Transform before = entity.getComponent<Transform>();
 
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
 
     const Transform& after = entity.getComponent<Transform>();
     CHECK(after.position == before.position);
@@ -683,7 +684,7 @@ void testRenderSystemDoesNotModifyTheTransform()
 void testRenderSystemRunsAfterSimulationSystems()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
 
     engine::ecs::SystemManager systems;
@@ -697,8 +698,8 @@ void testRenderSystemRunsAfterSimulationSystems()
     entity.addComponent<Rectangle>();
 
     // One second of drift, then draw: the draw must see the moved position.
-    systems.update(manager, input, 1.0F);
-    renderSystem.update(manager, input, 0.0F);
+    systems.update(manager, actions, 1.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 1);
     if (renderer.draws().size() == 1)
@@ -710,7 +711,7 @@ void testRenderSystemRunsAfterSimulationSystems()
 void testRenderSystemDoesNotOwnEntities()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -721,21 +722,21 @@ void testRenderSystemDoesNotOwnEntities()
         Entity& entity = manager.addEntity("entity");
         entity.addComponent<Transform>();
         entity.addComponent<Rectangle>();
-        renderSystem.update(manager, input, 0.016F);
+        renderSystem.update(manager, actions, 0.016F);
         CHECK(renderer.draws().size() == 1);
     }
 
     // Systems are gone; the world is untouched and still drawable.
     CHECK(manager.aliveEntityCount() == 1);
     CHECK(manager.query<Transform, Rectangle>().size() == 1);
-    renderSystem.update(manager, input, 0.016F);
+    renderSystem.update(manager, actions, 0.016F);
     CHECK(renderer.draws().size() == 2);
 }
 
 void testRendererFrameProtocol()
 {
     EntityManager manager;
-    [[maybe_unused]] engine::input::Input input;
+    [[maybe_unused]] engine::input::ActionState actions;
     RecordingRenderer renderer;
     engine::graphics::Camera camera;
     FakeAssetManager assets;
@@ -749,7 +750,7 @@ void testRendererFrameProtocol()
     entity.addComponent<Transform>();
     entity.addComponent<Rectangle>();
 
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
     renderer.endFrame();
 
     CHECK(renderer.beginFrameCount() == 1);
@@ -1256,14 +1257,14 @@ void testRenderSystemTextureQueryDrawsTextures()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
     renderer.beginFrame();
 
     addTexturedEntity(manager, "mario_ground", Vec2{100.0F, 50.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // The new query drew, and the rectangle query did not.
     CHECK(renderer.textureDraws().size() == 1U);
@@ -1276,14 +1277,14 @@ void testRenderSystemRequestsTheNameTheComponentCarries()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
     renderer.beginFrame();
 
     addTexturedEntity(manager, "mario_ground", Vec2{10.0F, 10.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // The name the component holds, not one the system invented.
     CHECK(assets.requested().size() == 1U);
@@ -1299,14 +1300,14 @@ void testRenderSystemSubmitsTheManagersOwnHandle()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
     renderer.beginFrame();
 
     addTexturedEntity(manager, "mario_ground", Vec2{10.0F, 10.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // Identity, not a copy: the draw references the very handle the manager owns,
     // which is what makes loading once worth anything.
@@ -1323,14 +1324,14 @@ void testTransformPositionMovesTheTexture()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
     renderer.beginFrame();
 
     addTexturedEntity(manager, "mario_ground", Vec2{300.0F, 200.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // The same conversion the rectangle query uses.
     CHECK(renderer.textureDraws().size() == 1U);
@@ -1347,7 +1348,7 @@ void testTransformScaleScalesTheTexture()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
@@ -1355,7 +1356,7 @@ void testTransformScaleScalesTheTexture()
 
     // The same shape of change a rectangle sees.
     addTexturedEntity(manager, "mario_ground", Vec2{0.0F, 0.0F}, Vec2{3.0F, 0.5F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     CHECK(renderer.textureDraws().size() == 1U);
     if (!renderer.textureDraws().empty())
@@ -1370,7 +1371,7 @@ void testCameraZoomScalesTheTextureWithoutMovingIt()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     Camera camera;
     camera.setZoom(2.0F);
@@ -1393,7 +1394,7 @@ void testCameraZoomScalesTheTextureWithoutMovingIt()
     rectangle.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
     addTexturedEntity(manager, "mario_ground", Vec2{150.0F, 80.0F});
 
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     CHECK(renderer.textureDraws().size() == 1U);
     CHECK(renderer.draws().size() == 1U);
@@ -1418,7 +1419,7 @@ void testMissingAssetNamePropagates()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     // Nothing declared, so the lookup fails.
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
@@ -1429,7 +1430,7 @@ void testMissingAssetNamePropagates()
     bool threw = false;
     try
     {
-        renderSystem.update(manager, input, 0.0F);
+        renderSystem.update(manager, actions, 0.0F);
     }
     catch (const assets::AssetNotFoundError&)
     {
@@ -1473,14 +1474,14 @@ void testRenderSystemHasNoAssetsUnavailableState()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
     renderer.beginFrame();
 
     addTexturedEntity(manager, "mario_ground", Vec2{0.0F, 0.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     CHECK(renderer.textureDraws().size() == 1U);
 }
@@ -1490,7 +1491,7 @@ void testRectangleQueryIsUnaffectedByTextures()
     EntityManager manager;
     RecordingRenderer renderer;
     FakeAssetManager assets;
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
@@ -1500,7 +1501,7 @@ void testRectangleQueryIsUnaffectedByTextures()
     Entity& rectangle = manager.addEntity("rectangle");
     rectangle.addComponent<Transform>(Transform{Vec2{100.0F, 50.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
     rectangle.addComponent<Rectangle>(Rectangle{Vec2{40.0F, 20.0F}, Color{1.0F, 0.0F, 0.0F, 1.0F}});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 1U);
     CHECK(renderer.textureDraws().empty());
@@ -1517,7 +1518,7 @@ void testTexturesAreDrawnAfterRectangles()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
@@ -1532,7 +1533,7 @@ void testTexturesAreDrawnAfterRectangles()
     rectangle.addComponent<Transform>(Transform{Vec2{100.0F, 50.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
     rectangle.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
 
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // Rectangle first, then texture, whatever the entity order was.
     CHECK(renderer.order().size() == 2U);
@@ -1549,7 +1550,7 @@ void testAnEntityWithBothComponentsDrawsBothRectangleFirst()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
@@ -1562,7 +1563,7 @@ void testAnEntityWithBothComponentsDrawsBothRectangleFirst()
     both.addComponent<Rectangle>(Rectangle{Vec2{10.0F, 10.0F}, Color{0.0F, 1.0F, 0.0F, 1.0F}});
     both.addComponent<components::Texture>(components::Texture{"mario_ground"});
 
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     CHECK(renderer.order().size() == 2U);
     CHECK(renderer.draws().size() == 1U);
@@ -1580,7 +1581,7 @@ void testRenderSystemDoesNotWriteToTheTextureTransform()
     RecordingRenderer renderer;
     FakeAssetManager assets;
     assets.declare("mario_ground");
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
@@ -1589,7 +1590,7 @@ void testRenderSystemDoesNotWriteToTheTextureTransform()
     const Entity& entity = addTexturedEntity(manager, "mario_ground", Vec2{100.0F, 50.0F});
     const Transform before = entity.getComponent<Transform>();
 
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // Drawing reads the world and never writes it, so a render pass cannot move
     // anything in the simulation.
@@ -1618,14 +1619,14 @@ void testARealConfiguredTextureRendersPixels()
     const assets::SfmlAssetManager assets = shippedAssets();
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     EntityManager manager;
     addTexturedEntity(manager, "mario_ground", Vec2{100.0F, 100.0F});
 
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // The image spans 68..132, so the centre is image and the corner is not.
     const sf::Color centre = readPixel(window, 100, 100);
@@ -1646,7 +1647,7 @@ void testTexturePositionAffectsRenderedPixels()
     const assets::SfmlAssetManager assets = shippedAssets();
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     EntityManager manager;
     // Off-centre, so the two candidate positions are distinguishable.
@@ -1654,7 +1655,7 @@ void testTexturePositionAffectsRenderedPixels()
 
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     // At (50,50) the image spans 18..82, so (50,50) is image and (150,150) is not.
     const sf::Color atPosition = readPixel(window, 50, 50);
@@ -1677,14 +1678,14 @@ void testTextureScaleAffectsRenderedPixels()
     const assets::SfmlAssetManager assets = shippedAssets();
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     EntityManager unscaledManager;
     addTexturedEntity(unscaledManager, "mario_ground", Vec2{200.0F, 200.0F}, Vec2{1.0F, 1.0F});
 
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    renderSystem.update(unscaledManager, input, 0.0F);
+    renderSystem.update(unscaledManager, actions, 0.0F);
     const sf::Color atScaleOne = readPixel(window, kProbeX, kProbeY);
     renderer.endFrame();
 
@@ -1693,7 +1694,7 @@ void testTextureScaleAffectsRenderedPixels()
 
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    renderSystem.update(doubledManager, input, 0.0F);
+    renderSystem.update(doubledManager, actions, 0.0F);
     const sf::Color atScaleTwo = readPixel(window, kProbeX, kProbeY);
     renderer.endFrame();
 
@@ -1712,7 +1713,7 @@ void testCameraZoomAffectsRenderedTexturePixels()
     sf::RenderWindow window(sf::VideoMode{400, 400}, "texture zoom");
     graphics::SfmlRenderer renderer{window};
     const assets::SfmlAssetManager assets = shippedAssets();
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     // The entity sits at the camera's own position, so it lands on the screen
     // centre and stays there at any zoom. worldToScreen is
@@ -1728,7 +1729,7 @@ void testCameraZoomAffectsRenderedTexturePixels()
     unzoomed.setViewport(Vec2{400.0F, 400.0F});
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    RenderSystem{renderer, unzoomed, assets}.update(manager, input, 0.0F);
+    RenderSystem{renderer, unzoomed, assets}.update(manager, actions, 0.0F);
     const sf::Color atZoomOne = readPixel(window, kProbeX, kProbeY);
     renderer.endFrame();
 
@@ -1737,7 +1738,7 @@ void testCameraZoomAffectsRenderedTexturePixels()
     zoomed.setZoom(2.0F);
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    RenderSystem{renderer, zoomed, assets}.update(manager, input, 0.0F);
+    RenderSystem{renderer, zoomed, assets}.update(manager, actions, 0.0F);
     const sf::Color atZoomTwo = readPixel(window, kProbeX, kProbeY);
     renderer.endFrame();
 
@@ -1757,7 +1758,7 @@ void testRectangleRenderingIsUnchangedAlongsideTextures()
     const assets::SfmlAssetManager assets = shippedAssets();
     const Camera camera;
     RenderSystem renderSystem{renderer, camera, assets};
-    [[maybe_unused]] Input input;
+    [[maybe_unused]] ActionState actions;
 
     EntityManager manager;
     Entity& rectangle = manager.addEntity("rectangle");
@@ -1767,7 +1768,7 @@ void testRectangleRenderingIsUnchangedAlongsideTextures()
 
     renderer.beginFrame();
     renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
-    renderSystem.update(manager, input, 0.0F);
+    renderSystem.update(manager, actions, 0.0F);
 
     const sf::Color inRectangle = readPixel(window, 30, 30);
     const sf::Color inTexture = readPixel(window, 150, 150);
@@ -1821,9 +1822,9 @@ void testAWholeTextureDrawNamesNoSourceRegion()
     entity.addComponent<Transform>(Transform{Vec2{10.0F, 20.0F}, Vec2{}, Vec2{1.0F, 1.0F}, 0.0F});
     entity.addComponent<components::Texture>(components::Texture{"mario_ground"});
 
-    Input input;
+    ActionState actions;
     renderer.beginFrame();
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
 
     CHECK(renderer.textureDraws().size() == 1U);
     if (renderer.textureDraws().size() != 1U)
@@ -2210,8 +2211,8 @@ void testASourceRegionDoesNotChangeTheCameraMapping()
     FakeAssetManager assets;
     assets.declare("mario_ground");
     RecordingRenderer renderer;
-    Input input;
-    static_cast<void>(input);
+    ActionState actions;
+    static_cast<void>(actions);
 
     Camera camera = identityCamera();
     camera.setPosition(Vec2{500.0F, 300.0F});

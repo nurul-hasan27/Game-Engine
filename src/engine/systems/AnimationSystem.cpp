@@ -56,13 +56,13 @@ void advanceAnimation(components::Animation& state, const std::uint32_t frameCou
     state.ended = true;
 }
 
-void AnimationSystem::update(engine::ecs::EntityManager& entities, input::Input& input,
+void AnimationSystem::update(engine::ecs::EntityManager& entities, const input::ActionState& actions,
                              const float deltaSeconds)
 {
     // An animation is driven by game frames, not by elapsed time, and it does not
     // read the keyboard. Both parameters are accepted only so every system shares
     // one signature.
-    static_cast<void>(input);
+    static_cast<void>(actions);
     static_cast<void>(deltaSeconds);
 
     for (auto&& [entity, animation] : entities.query<components::Animation>())

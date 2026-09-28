@@ -5,6 +5,8 @@
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/graphics/Camera.hpp"
+#include "engine/input/Action.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/systems/AnimationSystem.hpp"
 #include "engine/systems/CameraSystem.hpp"
 #include "engine/systems/MovementSystem.hpp"
@@ -34,8 +36,8 @@ using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::ecs::SystemManager;
 using engine::graphics::Camera;
-using engine::input::Input;
-using engine::input::Key;
+using engine::input::Action;
+using engine::input::ActionState;
 using engine::physics::BodyType;
 using engine::systems::AnimationSystem;
 using engine::systems::CameraSystem;
@@ -82,24 +84,30 @@ void addStaticWall(EntityManager& world, const Vec2& center, const Vec2& size, c
 /// system have an opinion about the keyboard. The engine provides the knob; the
 /// demo turns it.
 ///
-/// It reads `isKeyPressed` rather than `isKeyDown` so one press is one step and
-/// holding the key does not run the zoom away.
+/// It asks the action layer for `wasPressed` rather than `isActive`, so one press
+/// is one step and holding the key does not run the zoom away - and it cannot ask
+/// about a key at all, because a system is handed the action snapshot and not the
+/// keyboard.
 class ZoomKeysSystem final : public engine::ecs::System
 {
 public:
     explicit ZoomKeysSystem(Camera& camera) noexcept : m_camera{&camera} {}
 
-    void update(engine::ecs::EntityManager& entities, Input& input, const float deltaSeconds) override
+    void update(engine::ecs::EntityManager& entities, const ActionState& actions, const float deltaSeconds) override
     {
         // Neither is needed; the zoom is a per-press action, not an integration.
         static_cast<void>(entities);
         static_cast<void>(deltaSeconds);
 
-        if (input.isKeyPressed(Key::X))
+        // `wasPressed` rather than `isActive`, and that is the whole reason the
+        // action layer keeps both: a per-press action asked "is it held?" would
+        // change the zoom every frame the key is down, and holding Z to zoom out
+        // would divide the zoom by kZoomStep sixty times a second.
+        if (actions.wasPressed(Action::ZoomIn))
         {
             m_camera->setZoom(m_camera->zoom() * kZoomStep);
         }
-        if (input.isKeyPressed(Key::Z))
+        if (actions.wasPressed(Action::ZoomOut))
         {
             m_camera->setZoom(m_camera->zoom() / kZoomStep);
         }
@@ -125,7 +133,7 @@ void buildCameraDemo(EntityManager& world, SystemManager& systems, Camera& camer
     //   MovementSystem  input          -> velocity
     //   PhysicsSystem   velocity       -> position, then collisions
     //   CameraSystem    target position -> camera position
-    //   ZoomKeysSystem  key presses    -> camera zoom
+    //   ZoomKeysSystem  zoom actions   -> camera zoom
     //
     // The camera must come after physics, or it would follow where the player
     // was at the start of the frame rather than where it ended up. The zoom keys

@@ -46,7 +46,7 @@ namespace engine::systems
 class PhysicsSystem final : public engine::ecs::System
 {
 public:
-    void update(engine::ecs::EntityManager& entities, input::Input& input, float deltaSeconds) override;
+    void update(engine::ecs::EntityManager& entities, const input::ActionState& actions, float deltaSeconds) override;
 
     [[nodiscard]] const char* name() const override { return "PhysicsSystem"; }
 };

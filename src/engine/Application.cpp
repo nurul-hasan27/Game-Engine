@@ -1,5 +1,7 @@
 #include "engine/Application.hpp"
 #include "engine/EngineConfig.hpp"
+#include "engine/input/ActionMap.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/input/SfmlKeyMap.hpp"
 #include "engine/math/Vec2.hpp"
 
@@ -27,7 +29,8 @@ constexpr Color kWindowBackground = toColor(config::kBackgroundColorRed, config:
 
 Application::Application()
     : m_window(sf::VideoMode{config::kWindowWidth, config::kWindowHeight}, config::kWindowTitle), m_time{},
-      m_input{}, m_entityManager{}, m_systemManager{}, m_camera{}, m_renderer{m_window},
+      m_input{}, m_actionMap{input::defaultActionMap()}, m_actions{}, m_entityManager{}, m_systemManager{},
+      m_camera{}, m_renderer{m_window},
       m_assets{std::filesystem::path{config::kAssetsConfig}},
       // Borrowed by const reference, and declared after all three so they are
       // already alive. See the member ordering note in Application.hpp for why the
@@ -111,9 +114,21 @@ void Application::update()
     // correctness must not depend on it.
     m_time.tick();
 
-    // Behaviour: every system gets the same input state and the same delta for
-    // this frame, and none of them can reach either another way.
-    m_systemManager.update(m_entityManager, m_input, m_time.deltaSeconds());
+    // Translate the frame's raw keyboard state into actions, once, right here.
+    //
+    // This is the only place in the engine that builds an action snapshot, and it
+    // runs after the events have been recorded and before any system runs. Every
+    // system therefore sees the same coherent picture of the frame: the same held
+    // keys, the same just-pressed edges, the same everything.
+    //
+    // `update` overwrites rather than accumulates, so this cannot be left
+    // half-done, and calling it once is enough.
+    m_actions.update(m_actionMap, m_input);
+
+    // Behaviour: every system gets the same action snapshot and the same delta for
+    // this frame, and none of them can reach either another way. A system is
+    // handed the snapshot rather than the keyboard, so it cannot name a key.
+    m_systemManager.update(m_entityManager, m_actions, m_time.deltaSeconds());
 
     // Deferred destruction cleanup, after systems have run, so an entity a
     // system flagged this frame is erased only once nothing is iterating.
@@ -127,7 +142,7 @@ void Application::render()
     // itself; it only sequences the pass.
     m_renderer.beginFrame();
     m_renderer.clear(kWindowBackground);
-    m_renderSystem.update(m_entityManager, m_input, 0.0F);
+    m_renderSystem.update(m_entityManager, m_actions, 0.0F);
     m_renderer.endFrame();
 }
 

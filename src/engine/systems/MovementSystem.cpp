@@ -2,7 +2,8 @@
 
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
-#include "engine/input/Input.hpp"
+#include "engine/input/Action.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/math/Vec2.hpp"
 
 namespace engine::systems
@@ -12,42 +13,47 @@ namespace
 
 /// Builds the unit direction the player is asking for.
 ///
-/// Which keys mean which direction is gameplay meaning, so it lives here in the
-/// system rather than in Input. Input only knows which physical keys are held.
-[[nodiscard]] Vec2 directionFrom(const input::Input& input) noexcept
+/// Asks about actions and never about keys. Which physical key means "move left"
+/// is [input::ActionMap]'s business; what left *means* - a unit step towards the
+/// left edge of the screen - is gameplay, and belongs here.
+///
+/// The four direction actions are asked for independently rather than being
+/// derived from one another, so the arrows in the default map need no special
+/// case and a rebinding cannot make the system inconsistent with itself.
+[[nodiscard]] Vec2 directionFrom(const input::ActionState& actions) noexcept
 {
     Vec2 direction{0.0F, 0.0F};
 
     // y decreases upwards, which matches the screen's y-down axis: "up" is -y.
-    if (input.isKeyDown(input::Key::W) || input.isKeyDown(input::Key::Up))
+    if (actions.isActive(input::Action::MoveUp))
     {
         direction.y -= 1.0F;
     }
 
-    if (input.isKeyDown(input::Key::S) || input.isKeyDown(input::Key::Down))
+    if (actions.isActive(input::Action::MoveDown))
     {
         direction.y += 1.0F;
     }
 
-    if (input.isKeyDown(input::Key::A) || input.isKeyDown(input::Key::Left))
+    if (actions.isActive(input::Action::MoveLeft))
     {
         direction.x -= 1.0F;
     }
 
-    if (input.isKeyDown(input::Key::D) || input.isKeyDown(input::Key::Right))
+    if (actions.isActive(input::Action::MoveRight))
     {
         direction.x += 1.0F;
     }
 
-    // Normalising is what stops W+D from moving sqrt(2) times as fast as W
-    // alone. Vec2::normalized returns the zero vector for the zero vector, so
-    // "no keys held" needs no special case and produces no movement.
+    // Normalising is what stops MoveUp+MoveRight from moving sqrt(2) times as far
+    // as MoveUp alone. Vec2::normalized returns the zero vector for the zero
+    // vector, so "nothing held" needs no special case and produces no movement.
     return direction.normalized();
 }
 
 } // namespace
 
-void MovementSystem::update(engine::ecs::EntityManager& entities, input::Input& input,
+void MovementSystem::update(engine::ecs::EntityManager& entities, const input::ActionState& actions,
                             const float deltaSeconds)
 {
     // Physics owns integration, so this system's job ends at setting a
@@ -56,7 +62,7 @@ void MovementSystem::update(engine::ecs::EntityManager& entities, input::Input& 
     // position here as well would move the body twice.
     static_cast<void>(deltaSeconds);
 
-    const Vec2 direction = directionFrom(input);
+    const Vec2 direction = directionFrom(actions);
     const Vec2 velocity = direction * m_speed;
 
     for (auto&& [entity, transform] : entities.query<components::Transform>())

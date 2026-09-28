@@ -76,7 +76,7 @@ public:
     /// Takes `input` only because every system shares one signature. Drawing
     /// does not read the keyboard, and this is not a way for rendering to grow a
     /// dependency on input later.
-    void update(engine::ecs::EntityManager& entities, input::Input& input, float deltaSeconds) override;
+    void update(engine::ecs::EntityManager& entities, const input::ActionState& actions, float deltaSeconds) override;
 
     [[nodiscard]] const char* name() const override { return "RenderSystem"; }
 

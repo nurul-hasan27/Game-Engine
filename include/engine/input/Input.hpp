@@ -39,6 +39,20 @@ enum class Key : std::uint8_t
     Z,
     X,
 
+    /// The four debugging toggles Assignment 3 asks for: *"Pressing the 'T' key
+    /// toggles drawing textures ... the 'C' key toggles drawing bounding boxes of
+    /// entities ... the 'G' key toggles drawing of the grid"*, plus its pause key,
+    /// *"The 'P' key should pause the game"*.
+    ///
+    /// They are tracked here because the action layer has to be able to name them
+    /// in a binding table. The keys themselves are inert until something acts on
+    /// the corresponding [Action](Action.hpp), which is the point: the engine
+    /// reports that P went down and leaves the meaning of P to the game.
+    P,
+    T,
+    C,
+    G,
+
     /// Sentinel used to size the state tables. Not a key.
     Count
 };

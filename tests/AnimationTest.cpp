@@ -6,6 +6,7 @@
 #include "engine/components/Texture.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/Renderer.hpp"
 #include "engine/input/Input.hpp"
@@ -63,7 +64,7 @@ using engine::ecs::EntityManager;
 using engine::graphics::Camera;
 using engine::graphics::RenderTransform;
 using engine::graphics::Renderer;
-using engine::input::Input;
+using engine::input::ActionState;
 using engine::systems::advanceAnimation;
 using engine::systems::AnimationSystem;
 
@@ -690,14 +691,14 @@ void testTheSystemAdvancesEveryAnimatedEntity()
     FakeAssetManager assets;
     assets.declare("walk", 4U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
     addAnimated(entities, "b", "walk");
     addAnimated(entities, "c", "walk");
 
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
 
     for (auto&& [entity, animation] : entities.query<engine::components::Animation>())
     {
@@ -713,7 +714,7 @@ void testTheSystemIgnoresEntitiesWithoutAnAnimation()
     FakeAssetManager assets;
     assets.declare("walk", 4U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     Entity& plain = entities.addEntity("plain");
@@ -721,7 +722,7 @@ void testTheSystemIgnoresEntitiesWithoutAnAnimation()
 
     // Must not throw, and must not reach the manager at all: there is nothing to
     // resolve.
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
 
     CHECK(assets.animationLookups() == 0U);
     CHECK(entities.aliveEntityCount() == 1U);
@@ -735,14 +736,14 @@ void testTheSystemIgnoresDeadEntities()
     FakeAssetManager assets;
     assets.declare("walk", 4U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     Entity& entity = addAnimated(entities, "gone", "walk");
     entities.destroyEntity(entity);
     entities.update();
 
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
 
     CHECK(assets.animationLookups() == 0U);
     CHECK(entities.aliveEntityCount() == 0U);
@@ -756,7 +757,7 @@ void testTwoEntitiesShareAnAssetAndPlayIndependently()
     FakeAssetManager assets;
     assets.declare("walk", 4U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     Entity& first = addAnimated(entities, "first", "walk");
@@ -765,7 +766,7 @@ void testTwoEntitiesShareAnAssetAndPlayIndependently()
     // Offset the second by starting it one frame along.
     second.getComponent<engine::components::Animation>().currentFrame = 2U;
 
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
 
     const engine::components::Animation& a = first.getComponent<engine::components::Animation>();
     const engine::components::Animation& b = second.getComponent<engine::components::Animation>();
@@ -787,7 +788,7 @@ void testEntitiesStayOutOfStepOnlyIfTheyStartThatWay()
     FakeAssetManager assets;
     assets.declare("walk", 3U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "twin_a", "walk");
@@ -797,7 +798,7 @@ void testEntitiesStayOutOfStepOnlyIfTheyStartThatWay()
 
     for (std::uint32_t tick = 0; tick < 30U; ++tick)
     {
-        system.update(entities, input, 0.0F);
+        system.update(entities, actions, 0.0F);
     }
 
     std::vector<std::uint32_t> frames;
@@ -826,7 +827,7 @@ void testTheSystemDestroysAFinishedNonRepeatingEntity()
     FakeAssetManager assets;
     assets.declare("blast", 2U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     // The entity is held rather than looked up, because the second update flags it
@@ -835,12 +836,12 @@ void testTheSystemDestroysAFinishedNonRepeatingEntity()
 
     // Two frames at speed 1: the first update selects frame 1, and the second is
     // when it has been held for its full period and reports ended.
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
     CHECK(entities.aliveEntityCount() == 1U);
     CHECK_FALSE(entity.getComponent<engine::components::Animation>().ended);
     CHECK(entity.getComponent<engine::components::Animation>().currentFrame == 1U);
 
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
     CHECK(entity.getComponent<engine::components::Animation>().ended);
 
     // `destroyEntity` sets a flag rather than erasing, so the entity stops being
@@ -865,14 +866,14 @@ void testTheSystemNeverDestroysALoopingEntity()
     FakeAssetManager assets;
     assets.declare("run", 4U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "runner", "run", true);
 
     for (std::uint32_t tick = 0; tick < 500U; ++tick)
     {
-        system.update(entities, input, 0.0F);
+        system.update(entities, actions, 0.0F);
         entities.update();
     }
 
@@ -888,7 +889,7 @@ void testTheSystemDestroysOnlyTheFinishedEntity()
     assets.declare("run", 3U, 1U);
     assets.declare("blast", 2U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "runner", "run", true);
@@ -896,7 +897,7 @@ void testTheSystemDestroysOnlyTheFinishedEntity()
 
     for (std::uint32_t tick = 0; tick < 20U; ++tick)
     {
-        system.update(entities, input, 0.0F);
+        system.update(entities, actions, 0.0F);
         entities.update();
     }
 
@@ -911,7 +912,7 @@ void testTheSystemFailsLoudlyOnAnUndeclaredAnimation()
     // than as an entity that mysteriously does not animate.
     FakeAssetManager assets;
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "ghost", "no_such_animation");
@@ -919,7 +920,7 @@ void testTheSystemFailsLoudlyOnAnUndeclaredAnimation()
     std::string message;
     try
     {
-        system.update(entities, input, 0.0F);
+        system.update(entities, actions, 0.0F);
     }
     catch (const AssetNotFoundError& error)
     {
@@ -939,7 +940,7 @@ void testTheSystemIgnoresDeltaSeconds()
     assets.declare("walk", 4U, 3U);
     AnimationSystem systemA{assets};
     AnimationSystem systemB{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager a;
     EntityManager b;
@@ -954,8 +955,8 @@ void testTheSystemIgnoresDeltaSeconds()
         // Alternating between a 1 ms frame and a 100 ms one - a 100,000x
         // difference in wall-clock time, which is roughly the range between a
         // 1000 FPS machine and a debugger pause.
-        systemA.update(a, input, (tick % 2U == 0U) ? 0.001F : 0.1F);
-        systemB.update(b, input, 0.0F);
+        systemA.update(a, actions, (tick % 2U == 0U) ? 0.001F : 0.1F);
+        systemB.update(b, actions, 0.0F);
         framesA.push_back(firstAnimation(a).currentFrame);
         framesB.push_back(firstAnimation(b).currentFrame);
     }
@@ -972,16 +973,16 @@ void testTheSystemResolvesOncePerEntityPerGameFrame()
     FakeAssetManager assets;
     assets.declare("walk", 4U, 1U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
     addAnimated(entities, "b", "walk");
 
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
     CHECK(assets.animationLookups() == 2U);
 
-    system.update(entities, input, 0.0F);
+    system.update(entities, actions, 0.0F);
     CHECK(assets.animationLookups() == 4U);
 }
 
@@ -993,7 +994,7 @@ void testTheSystemDoesNotWriteToTheAsset()
     FakeAssetManager assets;
     assets.declare("walk", 3U, 2U);
     AnimationSystem system{assets};
-    Input input;
+    ActionState actions;
 
     const Animation before = assets.animation("walk");
 
@@ -1002,7 +1003,7 @@ void testTheSystemDoesNotWriteToTheAsset()
 
     for (std::uint32_t tick = 0; tick < 10U; ++tick)
     {
-        system.update(entities, input, 0.0F);
+        system.update(entities, actions, 0.0F);
     }
 
     const Animation& after = assets.animation("walk");
@@ -1026,7 +1027,7 @@ void testRenderSystemDrawsTheCurrentFrame()
     Camera camera = identityCamera();
     AnimationSystem animation{assets};
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
@@ -1035,8 +1036,8 @@ void testRenderSystemDrawsTheCurrentFrame()
     entities.getEntities().begin()->getComponent<engine::components::Animation>().currentFrame = 2U;
 
     renderer.beginFrame();
-    animation.update(entities, input, 0.0F);
-    render.update(entities, input, 0.0F);
+    animation.update(entities, actions, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     // The advance moved it to frame 3, and the render submitted frame 3's region.
     CHECK(renderer.draws().size() == 1U);
@@ -1062,13 +1063,13 @@ void testRenderSystemResolvesTheAnimationsOwnTexture()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 1U);
     if (renderer.draws().size() != 1U)
@@ -1092,7 +1093,7 @@ void testRenderSystemFollowsTheFrameAsItChanges()
     Camera camera = identityCamera();
     AnimationSystem animation{assets};
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
@@ -1101,8 +1102,8 @@ void testRenderSystemFollowsTheFrameAsItChanges()
     for (std::uint32_t tick = 0; tick < 4U; ++tick)
     {
         renderer.beginFrame();
-        animation.update(entities, input, 0.0F);
-        render.update(entities, input, 0.0F);
+        animation.update(entities, actions, 0.0F);
+        render.update(entities, actions, 0.0F);
 
         if (renderer.draws().size() == 1U && renderer.draws()[0].source.has_value())
         {
@@ -1136,7 +1137,7 @@ void testRenderSystemDrawsTwoEntitiesAtTheirOwnFrames()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
@@ -1144,7 +1145,7 @@ void testRenderSystemDrawsTwoEntitiesAtTheirOwnFrames()
     entities.getEntities().begin()->getComponent<engine::components::Animation>().currentFrame = 1U;
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 2U);
     if (renderer.draws().size() != 2U)
@@ -1170,14 +1171,14 @@ void testAnAnimatedEntityIsNotAlsoDrawnAsAPlainTexture()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     Entity& entity = addAnimated(entities, "a", "walk");
     entity.addComponent<engine::components::Texture>(engine::components::Texture{"walk_texture"});
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 1U);
     if (renderer.draws().size() != 1U)
@@ -1202,7 +1203,7 @@ void testAPlainTextureIsStillDrawnWhole()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     Entity& entity = entities.addEntity("brick");
@@ -1210,7 +1211,7 @@ void testAPlainTextureIsStillDrawnWhole()
     entity.addComponent<engine::components::Texture>(engine::components::Texture{"ground_texture"});
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 1U);
     if (renderer.draws().size() != 1U)
@@ -1232,7 +1233,7 @@ void testAnimationsAreDrawnAfterPlainTexturesAndRectangles()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
 
@@ -1247,7 +1248,7 @@ void testAnimationsAreDrawnAfterPlainTexturesAndRectangles()
     addAnimated(entities, "anim", "walk");
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     // The recording renderer counts rectangles separately from textures, so this
     // checks the two texture-bearing queries in the right relative order: the plain
@@ -1272,7 +1273,7 @@ void testAnAnimationWithoutATransformIsNotDrawn()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     Entity& entity = entities.addEntity("floating");
@@ -1281,7 +1282,7 @@ void testAnAnimationWithoutATransformIsNotDrawn()
     entity.addComponent<engine::components::Animation>(animation);
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     CHECK(renderer.draws().empty());
 }
@@ -1300,13 +1301,13 @@ void testRenderSystemAppliesTheCameraToAnAnimation()
     camera.setZoom(2.0F);
 
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
 
     renderer.beginFrame();
-    render.update(entities, input, 0.0F);
+    render.update(entities, actions, 0.0F);
 
     CHECK(renderer.draws().size() == 1U);
     if (renderer.draws().size() != 1U)
@@ -1332,7 +1333,7 @@ void testRenderSystemDoesNotWriteTheAnimationComponent()
     RecordingRenderer renderer;
     Camera camera = identityCamera();
     engine::systems::RenderSystem render{renderer, camera, assets};
-    Input input;
+    ActionState actions;
 
     EntityManager entities;
     addAnimated(entities, "a", "walk");
@@ -1342,7 +1343,7 @@ void testRenderSystemDoesNotWriteTheAnimationComponent()
     for (int pass = 0; pass < 5; ++pass)
     {
         renderer.beginFrame();
-        render.update(entities, input, 0.0F);
+        render.update(entities, actions, 0.0F);
     }
 
     const std::uint32_t after = firstAnimation(entities).currentFrame;

@@ -7,6 +7,8 @@
 #include "engine/math/Vec2.hpp"
 #include "engine/physics/Aabb.hpp"
 #include "engine/systems/MovementSystem.hpp"
+#include "engine/input/ActionMap.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
 
 #include <cmath>
@@ -27,6 +29,8 @@ using engine::components::Transform;
 using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::input::Input;
+using engine::input::ActionState;
+using engine::input::defaultActionMap;
 using engine::input::Key;
 using engine::physics::Aabb;
 using engine::physics::BodyType;
@@ -265,11 +269,14 @@ Transform& transformOf(Entity& entity)
 /// that matters: the body is stopped at the surface, not beyond it.
 void step(EntityManager& manager, const int frames, const float deltaSeconds = 1.0F / 60.0F)
 {
-    Input input;
+    // No key is ever pressed here, so this helper has no Input at all: physics
+    // alone moves these bodies. The ActionState is the default all-false one,
+    // which is what "no input" means to a system.
+    ActionState actions;
     PhysicsSystem physics;
     for (int frame = 0; frame < frames; ++frame)
     {
-        physics.update(manager, input, deltaSeconds);
+        physics.update(manager, actions, deltaSeconds);
     }
 }
 
@@ -281,16 +288,19 @@ void testPhysicsIntegratesVelocity()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
     Entity& entity = makeBody(manager, Vec2{0.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
     transformOf(entity).velocity = Vec2{100.0F, 0.0F};
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
     CHECK_NEAR_VEC(transformOf(entity).position, Vec2(100.0F, 0.0F));
 
-    systems.update(manager, input, 0.5F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 0.5F);
     CHECK_NEAR_VEC(transformOf(entity).position, Vec2(150.0F, 0.0F));
 }
 
@@ -298,6 +308,7 @@ void testStaticBodyNeverMoves()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -305,7 +316,8 @@ void testStaticBodyNeverMoves()
     // Even if something hands a static body a velocity, physics discards it.
     transformOf(wall).velocity = Vec2{500.0F, 500.0F};
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     CHECK_NEAR_VEC(transformOf(wall).position, Vec2(0.0F, 0.0F));
     CHECK_NEAR_VEC(transformOf(wall).velocity, Vec2(0.0F, 0.0F));
@@ -357,6 +369,7 @@ void testDynamicTakesTheWholeCorrectionAgainstAStatic()
     // answer. Here the whole correction has to happen at once.
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -371,7 +384,8 @@ void testDynamicTakesTheWholeCorrectionAgainstAStatic()
     // axis to escape along.
     makeBody(manager, Vec2{400.0F, 0.0F}, Vec2{100.0F, 1000.0F}, BodyType::Static);
 
-    systems.update(manager, input, 0.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 0.0F);
 
     // The full 35, not half of it: 360 - 35 = 325, which puts the player's right
     // face exactly on the wall's left face.
@@ -437,6 +451,7 @@ void testStaticVersusStaticDoesNothing()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -444,7 +459,8 @@ void testStaticVersusStaticDoesNothing()
     Entity& first = makeBody(manager, Vec2{0.0F, 0.0F}, Vec2{40.0F, 40.0F}, BodyType::Static);
     Entity& second = makeBody(manager, Vec2{10.0F, 0.0F}, Vec2{40.0F, 40.0F}, BodyType::Static);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // Neither can be pushed, so nothing moves. Overlapping walls are a level
     // design problem, not something the simulation should paper over.
@@ -460,6 +476,7 @@ void testDynamicVersusDynamicSplitsCorrection()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -468,7 +485,8 @@ void testDynamicVersusDynamicSplitsCorrection()
                              Vec2{30.0F, 0.0F});
     Entity& second = makeBody(manager, Vec2{40.0F, 0.0F}, Vec2{40.0F, 40.0F}, BodyType::Dynamic);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // After integration the first is at 30, giving 30 of horizontal overlap
     // against 40 of vertical overlap, so the correction is horizontal. It is
@@ -509,6 +527,7 @@ void testMovingAwayKeepsVelocity()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -521,7 +540,8 @@ void testMovingAwayKeepsVelocity()
                               Vec2{50.0F, 0.0F});
 
     // Zero elapsed time, so this exercises resolution alone with no integration.
-    systems.update(manager, input, 0.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 0.0F);
 
     // Pushed clear to the right, and still moving right.
     CHECK(transformOf(player).position.x > 210.0F);
@@ -532,6 +552,7 @@ void testNoCollisionLeavesEverythingAlone()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -539,7 +560,8 @@ void testNoCollisionLeavesEverythingAlone()
                               Vec2{10.0F, 20.0F});
     Entity& still = makeBody(manager, Vec2{500.0F, 500.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     CHECK_NEAR_VEC(transformOf(moving).position, Vec2(10.0F, 20.0F));
     CHECK_NEAR_VEC(transformOf(moving).velocity, Vec2(10.0F, 20.0F));
@@ -555,6 +577,7 @@ void testDeadEntitiesAreIgnored()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -563,7 +586,8 @@ void testDeadEntitiesAreIgnored()
                             Vec2{300.0F, 0.0F});
     manager.destroyEntity(dead);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // A dead body is not integrated and not collided, so it is left as it was.
     CHECK_NEAR_VEC(transformOf(dead).position, Vec2(0.0F, 0.0F));
@@ -574,6 +598,7 @@ void testEntitiesWithoutColliderAreIgnored()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -585,7 +610,8 @@ void testEntitiesWithoutColliderAreIgnored()
     // Overlaps the first body in space, but has no box to be tested with.
     makeBody(manager, Vec2{200.0F, 0.0F}, Vec2{20.0F, 200.0F}, BodyType::Static);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // It still integrates velocity, which is what a plain Transform entity does.
     CHECK_NEAR_VEC(transformOf(ghost).position, Vec2(100.0F, 0.0F));
@@ -595,6 +621,7 @@ void testEntityWithoutBodyIsNotResolved()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -606,7 +633,8 @@ void testEntityWithoutBodyIsNotResolved()
 
     makeBody(manager, Vec2{200.0F, 0.0F}, Vec2{20.0F, 200.0F}, BodyType::Static);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // It integrates, and is not pushed out of the wall.
     CHECK_NEAR_VEC(transformOf(shape).position, Vec2(300.0F, 0.0F));
@@ -620,6 +648,7 @@ void testEachPairResolvedOnce()
     // corrections would compound and these exact positions would not come out.
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -629,7 +658,8 @@ void testEachPairResolvedOnce()
     Entity& second = makeBody(manager, Vec2{15.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
     Entity& third = makeBody(manager, Vec2{30.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
 
-    systems.update(manager, input, 0.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 0.0F);
 
     // Pairs visited, in ECS order, are (0,1), (0,2), (1,2). (0,2) is separated
     // and contributes nothing.
@@ -657,12 +687,14 @@ void testBodiesDoNotSelfCollide()
     // the correction would be the box's own full size and it would jump.
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
     Entity& only = makeBody(manager, Vec2{0.0F, 0.0F}, Vec2{40.0F, 40.0F}, BodyType::Dynamic);
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     CHECK_NEAR_VEC(transformOf(only).position, Vec2(0.0F, 0.0F));
 }
@@ -678,6 +710,7 @@ void testMovementThenPhysicsMatchesOldBehaviour()
     // position += direction * speed * deltaSeconds.
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(100.0F);
     systems.add<PhysicsSystem>(); // registered after: consumes the velocity
@@ -685,7 +718,8 @@ void testMovementThenPhysicsMatchesOldBehaviour()
     Entity& player = makeBody(manager, Vec2{0.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
 
     input.processKeyDown(Key::D);
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // Phase 7 would have produced position.x == 100 directly.
     CHECK_NEAR_VEC(transformOf(player).position, Vec2(100.0F, 0.0F));
@@ -696,6 +730,7 @@ void testPlayerCannotPassThroughWall()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(300.0F);
     systems.add<PhysicsSystem>(); // registered after: consumes the velocity
@@ -709,7 +744,8 @@ void testPlayerCannotPassThroughWall()
     // Many frames of holding right. The player must be stopped, not tunnelled.
     for (int frame = 0; frame < 200; ++frame)
     {
-        systems.update(manager, input, 1.0F / 60.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F / 60.0F);
     }
 
     // The wall spans x 375..425. The player never gets past its left face.
@@ -723,6 +759,7 @@ void testPlayerStaysResponsiveAfterCollision()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(200.0F);
     systems.add<PhysicsSystem>();
@@ -734,7 +771,8 @@ void testPlayerStaysResponsiveAfterCollision()
     input.processKeyDown(Key::D);
     for (int frame = 0; frame < 100; ++frame)
     {
-        systems.update(manager, input, 1.0F / 60.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F / 60.0F);
     }
     const float stoppedAt = transformOf(player).position.x;
     CHECK(stoppedAt < 375.0F);
@@ -746,7 +784,8 @@ void testPlayerStaysResponsiveAfterCollision()
     input.processKeyDown(Key::A);
     for (int frame = 0; frame < 30; ++frame)
     {
-        systems.update(manager, input, 1.0F / 60.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F / 60.0F);
     }
     const float backedOff = transformOf(player).position.x;
     CHECK(backedOff < stoppedAt - 1.0F);
@@ -757,7 +796,8 @@ void testPlayerStaysResponsiveAfterCollision()
     input.processKeyDown(Key::D);
     for (int frame = 0; frame < 90; ++frame)
     {
-        systems.update(manager, input, 1.0F / 60.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F / 60.0F);
     }
     CHECK(transformOf(player).position.x > backedOff + 1.0F);
     CHECK(transformOf(player).position.x < 375.0F);
@@ -767,6 +807,7 @@ void testDiagonalMovementStillNormalized()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(100.0F);
     systems.add<PhysicsSystem>();
@@ -775,7 +816,8 @@ void testDiagonalMovementStillNormalized()
 
     input.processKeyDown(Key::W);
     input.processKeyDown(Key::D);
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // Exactly one second of speed, not sqrt(2) times it.
     CHECK_NEAR(transformOf(player).position.length(), 100.0F);
@@ -786,6 +828,7 @@ void testDiagonalCollisionResolvesOnOneAxis()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(200.0F);
     systems.add<PhysicsSystem>();
@@ -802,7 +845,8 @@ void testDiagonalCollisionResolvesOnOneAxis()
 
     for (int frame = 0; frame < 60; ++frame)
     {
-        systems.update(manager, input, 1.0F / 60.0F);
+        actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F / 60.0F);
     }
 
     // Stopped horizontally against the wall, which spans x 375..425, so the
@@ -820,6 +864,7 @@ void testNoInputMeansNoMovement()
 {
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<MovementSystem>(100.0F);
     systems.add<PhysicsSystem>();
@@ -827,7 +872,8 @@ void testNoInputMeansNoMovement()
     Entity& player = makeBody(manager, Vec2{50.0F, 50.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic,
                               Vec2{40.0F, 0.0F});
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // MovementSystem clears the velocity because nothing is held, so physics
     // integrates nothing. The body is not gliding.
@@ -838,9 +884,10 @@ void testNoInputMeansNoMovement()
 void testSpeedIndependentOfFrameCount()
 {
     Input input;
+    ActionState actions;
     input.processKeyDown(Key::D);
 
-    auto travel = [&input](const int frames, const float each)
+    auto travel = [&input, &actions](const int frames, const float each)
     {
         EntityManager manager;
         engine::ecs::SystemManager systems;
@@ -850,7 +897,8 @@ void testSpeedIndependentOfFrameCount()
 
         for (int frame = 0; frame < frames; ++frame)
         {
-            systems.update(manager, input, each);
+            actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, each);
         }
         return transformOf(player).position.x;
     };
@@ -875,6 +923,7 @@ void testTunnellingIsPossibleAndUnprevented()
     // than to suggest it is handled.
     EntityManager manager;
     Input input;
+    ActionState actions;
     engine::ecs::SystemManager systems;
     systems.add<PhysicsSystem>();
 
@@ -882,7 +931,8 @@ void testTunnellingIsPossibleAndUnprevented()
     Entity& bullet = makeBody(manager, Vec2{0.0F, 0.0F}, Vec2{10.0F, 10.0F}, BodyType::Dynamic,
                               Vec2{5000.0F, 0.0F});
 
-    systems.update(manager, input, 1.0F);
+    actions.update(defaultActionMap(), input);
+    systems.update(manager, actions, 1.0F);
 
     // It went clean through. Expected, documented, and not fixed in this phase.
     CHECK(transformOf(bullet).position.x > 200.0F);

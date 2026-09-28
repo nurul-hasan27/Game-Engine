@@ -72,7 +72,7 @@ public:
 
     explicit MovementSystem(const float speed = kDefaultSpeed) noexcept : m_speed{speed} {}
 
-    void update(engine::ecs::EntityManager& entities, input::Input& input, float deltaSeconds) override;
+    void update(engine::ecs::EntityManager& entities, const input::ActionState& actions, float deltaSeconds) override;
 
     [[nodiscard]] const char* name() const override { return "MovementSystem"; }
 

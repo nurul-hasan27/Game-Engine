@@ -6,6 +6,8 @@
 #include "engine/ecs/SystemManager.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/SfmlRenderer.hpp"
+#include "engine/input/ActionMap.hpp"
+#include "engine/input/ActionState.hpp"
 #include "engine/input/Input.hpp"
 #include "engine/systems/RenderSystem.hpp"
 
@@ -27,7 +29,9 @@ namespace engine
 /// | ------ | -------------- |
 /// | `sf::RenderWindow` | the window, its events, and presentation |
 /// | `Time` | measures how long each frame actually took |
-/// | `input::Input` | keyboard state for the current frame |
+/// | `input::Input` | raw keyboard state for the current frame |
+/// | `input::ActionMap` | which physical key drives which action |
+/// | `input::ActionState` | what the actions are doing this frame |
 /// | `EntityManager` | the world: every entity and its components |
 /// | `SystemManager` | the simulation systems, run in registration order |
 /// | `graphics::Camera` | where in the world the view is looking |
@@ -91,7 +95,8 @@ namespace engine
 /// input.beginFrame()                 clear pressed/released, keep held state
 /// processEvents()                    window close, and keyboard into Input
 /// time.tick()                        measures this frame's real duration
-/// systemManager.update(world, in, dt) simulation systems read input, write data
+/// actions.update(map, input)         Input + ActionMap -> this frame's actions
+/// systemManager.update(world, act, dt) simulation systems read actions, write data
 ///   ├─ MovementSystem                 input -> Transform::velocity
 ///   ├─ PhysicsSystem                  velocity -> position, then collisions
 ///   └─ CameraSystem                   target's world position -> Camera
@@ -175,9 +180,25 @@ public:
     /// handed an `engine::graphics::Renderer&` instead of reaching for this.
     [[nodiscard]] graphics::Renderer& renderer() noexcept { return m_renderer; }
 
-    /// Keyboard state for the current frame, mainly for tools. Systems are
-    /// handed the same object by reference and should not reach for this.
+    /// Raw keyboard state for the current frame.
+    ///
+    /// For a debug overlay or a tool that wants to show which keys are held.
+    /// **Gameplay systems cannot reach this**: they are handed the action snapshot
+    /// instead, and a system has no way to name a physical key. Keeping the raw
+    /// layer reachable from the composition root and from nowhere else is what
+    /// stops "just check if the key is down" from creeping back into a system.
     [[nodiscard]] const input::Input& input() const noexcept { return m_input; }
+
+    /// Which physical key drives which action.
+    ///
+    /// Handed out as a const reference: the mapping is established once, at
+    /// construction, and no system changes it. A rebinding feature would need a
+    /// mutable accessor and would have to say what a mid-frame change means -
+    /// which is why there is not one here.
+    [[nodiscard]] const input::ActionMap& actionMap() const noexcept { return m_actionMap; }
+
+    /// What the actions are doing this frame, as handed to every system.
+    [[nodiscard]] const input::ActionState& actions() const noexcept { return m_actions; }
 
     /// The loaded assets, for a debug overlay or a tool.
     ///
@@ -213,6 +234,8 @@ private:
     sf::RenderWindow m_window;
     Time m_time;
     input::Input m_input;
+    input::ActionMap m_actionMap;
+    input::ActionState m_actions;
     ecs::EntityManager m_entityManager;
     ecs::SystemManager m_systemManager;
     graphics::Camera m_camera;
