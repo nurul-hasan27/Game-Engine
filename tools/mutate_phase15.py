@@ -322,23 +322,24 @@ mutation(
 )
 
 mutation(
-    "screen-space-applies-zoom",
-    "toScreenTransform multiplies by the camera's zoom, which a menu must not be "
-    "subject to.",
-    "scene_test: 'camera zoom does not change menu text' and "
-    "'screen space still applies scale and rotation'",
+    "screen-space-applies-a-constant-scale",
+    "toScreenTransform multiplies the scale by a constant, so screen-space placement "
+    "stops being the entity's own scale.",
+    "scene_test: 'screen space still applies scale and rotation'. The original version "
+    "of this mutation gave toScreenTransform a Camera parameter, which is BUILD_"
+    "REJECTED - and rightly so, because two call sites in the suite pin the "
+    "one-argument signature and a signature change is the compiler's job to refuse. "
+    "The behaviour worth mutating is reachable without touching the signature, and "
+    "the camera-zoom path itself is covered by screen-space-through-camera and "
+    "screen-space-inverted, which both detect.",
     [patch(f"{INC}/graphics/RenderTransform.hpp",
            "constexpr RenderTransform toScreenTransform(const components::Transform& transform) noexcept\n"
            "{\n"
            "    return RenderTransform{transform.position, transform.scale, transform.angle * kDegreesPerRadian};\n}",
-           "constexpr RenderTransform toScreenTransform(const components::Transform& transform,\n"
-           "                                             const Camera& camera) noexcept\n"
+           "constexpr RenderTransform toScreenTransform(const components::Transform& transform) noexcept\n"
            "{\n"
-           "    return RenderTransform{transform.position, transform.scale * camera.zoom(),\n"
-           "                           transform.angle * kDegreesPerRadian}; // MUTATION\n}"),
-     patch(f"{SRC}/systems/RenderSystem.cpp",
-           "graphics::toScreenTransform(transform)",
-           "graphics::toScreenTransform(transform, *m_camera)")],
+           "    return RenderTransform{transform.position, transform.scale * 2.0F,\n"
+           "                           transform.angle * kDegreesPerRadian}; // MUTATION\n}")],
 )
 
 mutation(
@@ -430,17 +431,23 @@ mutation(
     "one it is given.",
     "scene_test: 'assets are shared not duplicated' - the assertion is pointer "
     "identity against the application's own manager, not merely that both can load",
-    [patch(f"{SRC}/scene/PlayScene.cpp",
-           "#include \"engine/level/LevelLoader.hpp\"",
-           "#include \"engine/level/LevelLoader.hpp\"\n"
-           "#include \"engine/assets/SfmlAssetManager.hpp\"\n"
-           "namespace { engine::assets::SfmlAssetManager* g_own = nullptr; } // MUTATION"),
-     patch(f"{SRC}/scene/PlayScene.cpp",
-           "    const level::LevelLoader loader{context.assets()};",
-           "    if (g_own == nullptr)\n    {\n"
-           "        g_own = new assets::SfmlAssetManager{std::filesystem::path{config::kAssetsConfig}};\n"
-           "    }\n"
-           "    const level::LevelLoader loader{*g_own}; // MUTATION")],
+    # The first attempt made the *loader* use a second manager, and it went
+    # UNDETECTED: `context().assets()` was still the shared one, so the pointer-identity
+    # assertion held and only the loader's private choice had changed. The duplication
+    # that matters is the one the scene can *see*, so the owner hands the context a
+    # second asset manager - and then a menu loads every texture and every font a
+    # second time, which is the thing the shared table exists to prevent.
+    [patch(f"{INC}/Application.hpp",
+           "    assets::SfmlAssetManager m_assets;",
+           "    assets::SfmlAssetManager m_assets;\n"
+           "    assets::SfmlAssetManager m_duplicateAssets; // MUTATION"),
+     patch(f"{SRC}/Application.cpp",
+           "      m_assets{std::filesystem::path{config::kAssetsConfig}},",
+           "      m_assets{std::filesystem::path{config::kAssetsConfig}},\n"
+           "      m_duplicateAssets{std::filesystem::path{config::kAssetsConfig}}, // MUTATION"),
+     patch(f"{SRC}/Application.cpp",
+           "      m_sceneContext{m_renderer, m_camera, m_assets},",
+           "      m_sceneContext{m_renderer, m_camera, m_duplicateAssets}, // MUTATION")],
 )
 
 mutation(
