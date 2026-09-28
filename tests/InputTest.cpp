@@ -434,7 +434,8 @@ Entity& makeMover(EntityManager& manager, const Vec2& position = Vec2{0.0F, 0.0F
 }
 
 /// One frame of the real chain: the keyboard becomes actions, MovementSystem turns
-/// actions into velocity, then PhysicsSystem integrates that velocity into position.
+/// actions into velocity, then PhysicsSystem integrates that velocity into position,
+/// and the frame boundary is crossed.
 ///
 /// Phase 7's tests drove MovementSystem alone and asserted where the body ended
 /// up, because MovementSystem moved position itself. Since Phase 8 it does not:
@@ -453,6 +454,20 @@ void stepFrame(EntityManager& manager, MovementSystem& movement, Input& input, c
     const ActionState actions = actionsFrom(input);
     movement.update(manager, actions, deltaSeconds);
     physics.update(manager, actions, deltaSeconds);
+
+    // Cross the frame boundary, which is what `Application` does at the top of
+    // every frame and what this helper was previously omitting.
+    //
+    // Without it the pressed edge is never cleared, so a key that went down once
+    // looks *freshly pressed* on every single frame. That makes a held key and a
+    // tapped key indistinguishable, and it would let a system ask `wasPressed`
+    // instead of `isActive` and still pass every movement group here - because
+    // every one of them presses a key once and then steps repeatedly, expecting
+    // the body to keep moving.
+    //
+    // Every assertion below is unchanged by this: held state survives
+    // `beginFrame()`, so a key that stays down still drives the action every frame.
+    input.beginFrame();
 }
 
 void testNoInputMeansNoMovement()
@@ -626,6 +641,75 @@ void testMovementIsDeltaTimeBased()
     stepFrame(manager, movement, input, 0.25F);
     stepFrame(manager, movement, input, 0.25F);
     CHECK_NEAR(entity.getComponent<Transform>().position.x, 100.0F);
+}
+
+void testHeldVerticalKeyKeepsMoving()
+{
+    // The vertical counterpart of the held-key groups, and it was missing.
+    //
+    // Every multi-frame group held A or D, so only the horizontal directions were
+    // ever proved to keep firing while held. That left the vertical branches
+    // untested across frames, and a system that asked `wasPressed` instead of
+    // `isActive` for up or down would move the body exactly one frame and then
+    // stop - a real bug that nothing would have caught.
+    EntityManager manager;
+    Input input;
+    MovementSystem movement{100.0F};
+
+    Entity& entity = makeMover(manager);
+    input.processKeyDown(Key::W);
+
+    // Four quarter-second frames of holding up: one second of speed, so 100 pixels
+    // up. With a per-frame action the body would rise 25 pixels on the first frame
+    // and then stop, and the total would be 25.
+    for (int frame = 0; frame < 4; ++frame)
+    {
+        stepFrame(manager, movement, input, 0.25F);
+    }
+    CHECK_NEAR(entity.getComponent<Transform>().position.y, -100.0F);
+
+    // Down, the same way. The arrow key rather than S, so the second binding is
+    // exercised on the same path.
+    input.reset();
+    EntityManager downward;
+    Entity& sink = makeMover(downward);
+    input.processKeyDown(Key::Down);
+
+    for (int frame = 0; frame < 4; ++frame)
+    {
+        stepFrame(downward, movement, input, 0.25F);
+    }
+    CHECK_NEAR(sink.getComponent<Transform>().position.y, 100.0F);
+}
+
+void testReleasingAVerticalKeyStopsTheBody()
+{
+    // The other half: a released action stops the movement rather than leaving the
+    // body drifting on the last velocity it was given.
+    EntityManager manager;
+    Input input;
+    MovementSystem movement{100.0F};
+
+    Entity& entity = makeMover(manager);
+    input.processKeyDown(Key::W);
+    stepFrame(manager, movement, input, 1.0F);
+    CHECK_NEAR(entity.getComponent<Transform>().position.y, -100.0F);
+
+    // Releasing is immediate. `Input` records the key as up at once, so the very
+    // next frame already sees no action held and sets no velocity - there is no
+    // frame of coasting to account for.
+    //
+    // Written the other way round first, which is the mistake worth naming: a
+    // release *edge* is what the snapshot reports, but `isActive` is false from the
+    // moment the key comes up, so this frame does not move either.
+    input.processKeyUp(Key::W);
+    stepFrame(manager, movement, input, 1.0F);
+    CHECK_NEAR(entity.getComponent<Transform>().position.y, -100.0F);
+    CHECK_NEAR(entity.getComponent<Transform>().velocity.y, 0.0F);
+
+    // And it stays put, so the release is not a one-frame fluke.
+    stepFrame(manager, movement, input, 1.0F);
+    CHECK_NEAR(entity.getComponent<Transform>().position.y, -100.0F);
 }
 
 void testSpeedIsIndependentOfFrameCount()
@@ -963,6 +1047,8 @@ int main()
         {"diagonal movement is normalized", &testDiagonalMovementIsNormalized},
         {"horizontal and vertical speeds match", &testHorizontalAndVerticalSpeedsMatch},
         {"movement is delta time based", &testMovementIsDeltaTimeBased},
+        {"held vertical key keeps moving", &testHeldVerticalKeyKeepsMoving},
+        {"releasing a vertical key stops the body", &testReleasingAVerticalKeyStopsTheBody},
         {"speed is independent of frame count", &testSpeedIsIndependentOfFrameCount},
         {"custom speed", &testCustomSpeed},
         {"movement sets velocity", &testMovementSetsVelocity},
