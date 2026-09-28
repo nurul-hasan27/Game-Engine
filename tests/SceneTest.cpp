@@ -904,8 +904,14 @@ void testTheMenuNavigatesOnActions()
 
     // The caption follows the selection, so the state is visible and not merely
     // held in a member.
-    CHECK(menu.world().getEntities("menu.option.0").begin()->getComponent<Text>().content == "> START");
-    CHECK(menu.world().getEntities("menu.option.1").begin()->getComponent<Text>().content == "  QUIT");
+    // Through a **named** `std::string`, like the code under test. A string literal
+    // would be safe - static storage duration - but the same line written with a
+    // computed tag would dangle exactly as `refreshSelection` did, and a test that is
+    // only safe by accident teaches the wrong pattern.
+    const std::string firstTag = "menu.option.0";
+    const std::string secondTag = "menu.option.1";
+    CHECK(menu.world().getEntities(firstTag).begin()->getComponent<Text>().content == "> START");
+    CHECK(menu.world().getEntities(secondTag).begin()->getComponent<Text>().content == "  QUIT");
 }
 
 void testTheMenuMovesOnThePressEdgeOnly()

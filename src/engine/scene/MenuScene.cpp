@@ -91,7 +91,21 @@ void MenuScene::refreshSelection()
         // world, so a pointer would be valid - but a query cannot be wrong about
         // whether the entity is still alive, and this runs every frame on a menu
         // with four entities, so the cost is not worth the lifetime question.
-        auto&& labels = m_world.getEntities("menu.option." + std::to_string(index));
+        //
+        // The tag is a **named** `std::string`, and that is load bearing rather than
+        // style. `EntityView` holds its tag as a `std::string_view`, and
+        // `getEntities` forwards its `string_view` parameter straight into it - so
+        // `getEntities("menu.option." + std::to_string(index))` leaves the view
+        // pointing at a `std::string` that died at the end of that same full
+        // expression. `auto&&` extends the lifetime of the *view*; it does nothing at
+        // all for the string the view points into.
+        //
+        // The Debug build happened to work, because the freed block still held the
+        // bytes; the Release build did not, and the captions silently kept their
+        // unprefixed text. Found by running the suite in Release, which is the only
+        // reason it was found at all.
+        const std::string tag = "menu.option." + std::to_string(index);
+        const auto& labels = m_world.getEntities(tag);
         // `const Entity&`, because `getEntities` hands out a read-only view. The
         // component itself is still mutable: `Entity::getComponent` is const and
         // returns `T&`, which is how a read-only view of the world can still be
