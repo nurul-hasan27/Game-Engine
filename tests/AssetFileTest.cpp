@@ -321,27 +321,537 @@ void testUnknownAssetTypeIsRejected()
     CHECK_STR(errorFrom("Sprite thing thing.png\n"), "line 1: unknown asset type 'Sprite'");
 }
 
-void testAnimationIsRejectedAsUnsupported()
-{
-    const std::string message =
-        errorFrom("Animation explosion assets/library/images/animations/explosion.png\n");
+// ---------------------------------------------------------------------------
+// Animations
+//
+// These replaced the two groups that used to assert `Animation` was rejected as
+// unsupported. The keyword is now honoured, so those groups asserted a contract
+// the engine has deliberately stopped having; keeping them would have meant a
+// green suite lying about what the parser does.
+// ---------------------------------------------------------------------------
 
-    // The message has to distinguish "not supported yet" from "I have never
-    // heard of this keyword", because Animation really is a keyword in the
-    // course asset format and a user will reasonably have copied it.
-    CHECK_STR(message, "line 1: 'Animation' is not supported yet; this engine understands only 'Texture' and 'Font' "
-                        "entries");
-    CHECK(reportsLine(message, 1U));
+void testAnimationEntryParsesEveryField()
+{
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run library/images/megaman/megaRun.png\n"
+                                                          "Animation mario_running mario_run 3 5\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    const AssetEntry& animation = entries[1];
+    CHECK(animation.type == AssetType::Animation);
+    CHECK_STR(animation.name, "mario_running");
+    CHECK_STR(animation.textureName, "mario_run");
+    CHECK(animation.frameCount == 3U);
+    CHECK(animation.speed == 5U);
+}
+
+void testAnimationEntryHasNoPath()
+{
+    // An animation names a texture, not a file, so there is nothing for `path` to
+    // hold. It must be empty rather than holding the texture's path, or a loader
+    // that walked every entry expecting a file would try to open it.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run run.png\n"
+                                                          "Animation mario_running mario_run 3 5\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK_STR(entries[1].path, "");
+}
+
+void testTextureAndFontEntriesCarryNoAnimationFields()
+{
+    // The mirror of the previous group: the extra fields default rather than
+    // picking up whatever happened to be on the line.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run run.png\n"
+                                                          "Font debug debug.ttf\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK_STR(entries[0].textureName, "");
+    CHECK(entries[0].frameCount == 0U);
+    CHECK(entries[0].speed == 0U);
+    CHECK_STR(entries[1].textureName, "");
+    CHECK(entries[1].frameCount == 0U);
+    CHECK(entries[1].speed == 0U);
+}
+
+void testAnimationMustFollowItsTexture()
+{
+    // The course's dependency rule, stated directly: a texture used by an
+    // animation must already have been defined before the animation is loaded.
+    const std::string message = errorFrom("Animation mario_running mario_run 3 5\n"
+                                          "Texture mario_run library/images/megaman/megaRun.png\n");
+
+    CHECK_STR(message, "line 1: Animation entry 'mario_running' animates texture 'mario_run', which no earlier "
+                       "Texture entry declares; a texture must be defined before an animation that uses it");
+}
+
+void testAnimationWithUnknownTextureIsRejected()
+{
+    // Not merely "declared later" but never declared at all. The message must
+    // quote the name that could not be found, because that is the thing to fix.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_walking mario_jump 2 4\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'mario_walking' animates texture 'mario_jump', which no earlier "
+                       "Texture entry declares; a texture must be defined before an animation that uses it");
+}
+
+void testAnimationCannotAnimateAFont()
+{
+    // A font is not a texture. Treating any earlier entry as a valid source would
+    // let a chain of animations reference each other with no image in it.
+    const std::string message = errorFrom("Font debug debug.ttf\n"
+                                          "Animation wobble debug 2 4\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'wobble' animates texture 'debug', which no earlier Texture entry "
+                       "declares; a texture must be defined before an animation that uses it");
+}
+
+void testAnimationCannotAnimateAnotherAnimation()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation first mario_run 2 4\n"
+                                          "Animation second first 2 4\n");
+
+    CHECK_STR(message, "line 3: Animation entry 'second' animates texture 'first', which no earlier Texture entry "
+                       "declares; a texture must be defined before an animation that uses it");
+}
+
+void testAnimationWithTwoTexturesPicksTheEarlierOne()
+{
+    // The rule is "declared before", not "declared most recently", and a second
+    // declaration of the same name is impossible anyway. What this pins down is
+    // that the check scans the whole prefix rather than only the previous line.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run run.png\n"
+                                                          "Texture mario_jump jump.png\n"
+                                                          "Font debug debug.ttf\n"
+                                                          "\n"
+                                                          "# a comment in between changes nothing\n"
+                                                          "Animation mario_running mario_run 3 5\n");
+
+    CHECK(entries.size() == 4U);
+    if (entries.size() != 4U)
+    {
+        return;
+    }
+
+    CHECK(entries[3].type == AssetType::Animation);
+    CHECK_STR(entries[3].textureName, "mario_run");
+}
+
+void testAnimationMissingNameIsRejected()
+{
+    // A bare keyword is one token where five are required, and the message names
+    // the field that is absent rather than counting tokens, so it says what to
+    // type. It quotes the animation's own syntax, not the texture's.
+    CHECK_STR(errorFrom("Animation\n"), "line 1: Animation entry is missing a name; expected 'Animation <name> "
+                                        "<textureName> <frameCount> <speed>'");
+
+    // A keyword and nothing else, on a later line, reports that later line.
+    CHECK_STR(errorFrom("Texture mario_run run.png\n"
+                        "Animation\n"),
+              "line 2: Animation entry is missing a name; expected 'Animation <name> <textureName> <frameCount> "
+              "<speed>'");
+}
+
+void testAnimationMissingTextureNameIsRejected()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'mario_running' is missing a textureName; expected 'Animation "
+                       "<name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationMissingFrameCountIsRejected()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'mario_running' animating texture 'mario_run' is missing a "
+                       "frameCount; expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationMissingSpeedIsRejected()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'mario_running' animating texture 'mario_run' is missing a speed; "
+                       "expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationWithTooManyTokensIsRejected()
+{
+    // The exact count is reported, not just "too many". A file author who wrote
+    // six tokens needs to be told there are six.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3 5 extra\n");
+
+    CHECK_STR(message, "line 2: Animation entry has 6 tokens; expected 'Animation <name> <textureName> <frameCount> "
+                       "<speed>'");
+}
+
+void testAnimationRejectsZeroFrameCount()
+{
+    // Zero frames would divide a texture into nothing. Rejecting it here means the
+    // loader can never be handed a divisor of zero.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 0 5\n");
+
+    CHECK_STR(message, "line 2: Animation entry has frameCount '0', which is not a positive number this engine can "
+                       "use; expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsZeroSpeed()
+{
+    // Zero speed is the reference implementation's divide-by-zero. Rejecting it
+    // at parse time is the whole reason this cannot happen.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3 0\n");
+
+    CHECK_STR(message, "line 2: Animation entry has speed '0', which is not a positive number this engine can use; "
+                       "expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsNonNumericFrameCount()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run three 5\n");
+
+    CHECK_STR(message, "line 2: Animation entry has frameCount 'three', which is not a positive decimal number; "
+                       "expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsNonNumericSpeed()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3 fast\n");
+
+    CHECK_STR(message, "line 2: Animation entry has speed 'fast', which is not a positive decimal number; expected "
+                       "'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsPartiallyNumericField()
+{
+    // `std::stoi("3x")` returns 3 and ignores the `x`. This must not, or a typo
+    // in a frame count would load as a different, valid animation.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3x 5\n");
+
+    CHECK_STR(message, "line 2: Animation entry has frameCount '3x', which is not a positive decimal number; "
+                       "expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsNegativeNumbers()
+{
+    // A leading `-` is not a digit, so this is a shape error rather than a range
+    // one. What matters is that it is refused.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3 -5\n");
+
+    CHECK_STR(message, "line 2: Animation entry has speed '-5', which is not a positive decimal number; expected "
+                       "'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsOversizedFrameCount()
+{
+    // Ten digits is the most that can be examined without risking overflow, and
+    // 9999999999 does not fit in the 32-bit field. It must be refused with a
+    // message about the value, not by wrapping to something small.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 99999999999 5\n");
+
+    CHECK_STR(message, "line 2: Animation entry has frameCount '99999999999', which is not a positive decimal "
+                       "number; expected 'Animation <name> <textureName> <frameCount> <speed>'");
+}
+
+void testAnimationRejectsFrameCountBeyondThirtyTwoBits()
+{
+    // 4294967295 does fit in uint32_t, so this is accepted by the field check and
+    // is the loader's problem to reject against a real image width. The point of
+    // this group is that it is *not* refused here, which is what makes the
+    // loader's divisibility check the only place it can be caught.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run run.png\n"
+                                                          "Animation mario_running mario_run 4294967295 5\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK(entries[1].frameCount == 4294967295U);
+}
+
+void testAnimationNameIsUniqueAgainstATexture()
+{
+    const std::string message = errorFrom("Texture shared shared.png\n"
+                                          "Animation shared mario_run 2 4\n");
+
+    CHECK_STR(message, "line 2: duplicate asset name 'shared'; it is already declared as a Texture");
+}
+
+void testAnimationNameIsUniqueAgainstAFont()
+{
+    const std::string message = errorFrom("Font shared shared.ttf\n"
+                                          "Texture mario_run run.png\n"
+                                          "Animation shared mario_run 2 4\n");
+
+    CHECK_STR(message, "line 3: duplicate asset name 'shared'; it is already declared as a Font");
+}
+
+void testAnimationNameIsUniqueAgainstAnotherAnimation()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation twin mario_run 2 4\n"
+                                          "Animation twin mario_run 3 4\n");
+
+    CHECK_STR(message, "line 3: duplicate asset name 'twin'; it is already declared as a Animation");
+}
+
+void testTextureNameIsUniqueAgainstAnAnimation()
+{
+    // The same flat namespace seen from the other direction: the animation claims
+    // the name first and the texture that follows is the one refused. The names
+    // are distinct from the texture the animation slices, so the only collision
+    // is the one under test.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_dashing mario_run 2 4\n"
+                                          "Texture mario_dashing other.png\n");
+
+    CHECK_STR(message, "line 3: duplicate asset name 'mario_dashing'; it is already declared as a Animation");
 }
 
 void testAnimationErrorNamesTheLineNumber()
 {
+    // Comments and blanks count toward the number, exactly as they do for a
+    // texture, so the reported line is the real one.
     const std::string message = errorFrom("# header\n"
                                           "\n"
-                                          "Texture mario mario.png\n"
-                                          "Animation explosion explosion.png\n");
+                                          "Texture mario_run run.png\n"
+                                          "# a comment\n"
+                                          "\n"
+                                          "Animation mario_running nowhere 3 5\n");
 
-    CHECK(reportsLine(message, 4U));
+    CHECK(reportsLine(message, 6U));
+}
+
+void testAnimationErrorIsReportedBeforeTheTextureIsChecked()
+{
+    // A line wrong in two ways reports the shape problem, because the numbers
+    // have to be readable before the reference means anything.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running nowhere zero 5\n");
+
+    CHECK(message.find("frameCount") != std::string::npos);
+    CHECK(message.find("nowhere") == std::string::npos);
+}
+
+void testAnimationErrorIsReportedBeforeADuplicateName()
+{
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run zero 5\n"
+                                          "Animation mario_running mario_run 2 4\n");
+
+    CHECK(message.find("frameCount") != std::string::npos);
+}
+
+void testMalformedAnimationStopsParsingAtThatLine()
+{
+    // Nothing after a bad animation may be returned, so a caller cannot load half
+    // a file. The group also proves the *animation* is what stopped it, by making
+    // the lines after it the only thing that would otherwise have parsed.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running nowhere 3 5\n"
+                                          "Texture mario_jump jump.png\n"
+                                          "Font debug debug.ttf\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'mario_running' animates texture 'nowhere', which no earlier "
+                       "Texture entry declares; a texture must be defined before an animation that uses it");
+}
+
+void testTrailingCommentIsStillRejectedOnAnAnimationLine()
+{
+    // Whole-line comments only, for every entry kind. A trailing `#` on an
+    // animation must not become a fifth-and-a-half field.
+    // The exact count is reported, and it counts the `#` and the words after it:
+    // the animation line is not being given a special exemption from the rule
+    // that stops a trailing comment being mistaken for a field.
+    const std::string message = errorFrom("Texture mario_run run.png\n"
+                                          "Animation mario_running mario_run 3 5 # walk cycle\n");
+
+    CHECK_STR(message, "line 2: Animation entry has 8 tokens; expected 'Animation <name> <textureName> <frameCount> "
+                       "<speed>'");
+}
+
+void testCommentsAndBlanksAroundAnimationsAreIgnored()
+{
+    const std::vector<AssetEntry> entries = parseAssetFile("# animations below\n"
+                                                          "\n"
+                                                          "Texture mario_run run.png\n"
+                                                          "   \n"
+                                                          "#Animation not_a_real_entry run.png\n"
+                                                          "Animation mario_running mario_run 3 5\n"
+                                                          "\n"
+                                                          "# trailing comment\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK(entries[1].type == AssetType::Animation);
+}
+
+void testAnimationsInterleaveWithEveryOtherKind()
+{
+    // A realistic file: textures, then animations that slice them, then more
+    // textures, then more animations referencing those. The rule is per-entry,
+    // not per-section, so an animation may follow any earlier texture.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture stand stand.png\n"
+                                                          "Animation stand_idle stand 1 1\n"
+                                                          "Texture run run.png\n"
+                                                          "Animation run_cycle run 3 8\n"
+                                                          "Font debug debug.ttf\n"
+                                                          "Texture death death.png\n"
+                                                          "Animation death_spin death 2 6\n");
+
+    CHECK(entries.size() == 7U);
+    if (entries.size() != 7U)
+    {
+        return;
+    }
+
+    CHECK(entries[1].type == AssetType::Animation);
+    CHECK(entries[3].type == AssetType::Animation);
+    CHECK(entries[4].type == AssetType::Font);
+    CHECK(entries[5].type == AssetType::Texture);
+    CHECK(entries[6].type == AssetType::Animation);
+    CHECK_STR(entries[6].textureName, "death");
+    CHECK(entries[6].frameCount == 2U);
+    CHECK(entries[6].speed == 6U);
+}
+
+void testSeveralAnimationsShareOneTexture()
+{
+    // One texture, several animations over it. Sharing is the point: the loader
+    // loads the image once and the animations are definitions over it.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture sheet sheet.png\n"
+                                                          "Animation sheet_walk sheet 4 6\n"
+                                                          "Animation sheet_run  sheet 4 3\n"
+                                                          "Animation sheet_once sheet 8 2\n");
+
+    CHECK(entries.size() == 4U);
+    if (entries.size() != 4U)
+    {
+        return;
+    }
+
+    CHECK_STR(entries[1].textureName, "sheet");
+    CHECK_STR(entries[2].textureName, "sheet");
+    CHECK_STR(entries[3].textureName, "sheet");
+    CHECK(entries[3].frameCount == 8U);
+}
+
+void testSingleFrameAnimationIsAccepted()
+{
+    // The course's level format makes every entity name an animation, including
+    // ones that never change, so a one-frame animation is normal rather than
+    // degenerate. The reference configuration declares thirteen of them.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture brick brick.png\n"
+                                                          "Animation brick_still brick 1 1\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK(entries[1].frameCount == 1U);
+    CHECK(entries[1].speed == 1U);
+}
+
+void testAnimationDoesNotAffectTextureOrFontParsing()
+{
+    // The same texture and font lines that parsed before animation support
+    // existed must still parse, byte for byte, now that it does. This is the
+    // regression guard for the shared tokenizer being resized from three fields
+    // to five.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario mario.png\n"
+                                                          "Font debug debug.ttf\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK(entries[0].type == AssetType::Texture);
+    CHECK_STR(entries[0].name, "mario");
+    CHECK_STR(entries[0].path, "mario.png");
+    CHECK(entries[1].type == AssetType::Font);
+    CHECK_STR(entries[1].name, "debug");
+    CHECK_STR(entries[1].path, "debug.ttf");
+}
+
+void testWindowsLineEndingsParseAnimationsToo()
+{
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run run.png\r\n"
+                                                          "Animation mario_running mario_run 3 5\r\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK(entries[1].frameCount == 3U);
+    CHECK(entries[1].speed == 5U);
+    CHECK_STR(entries[1].textureName, "mario_run");
+}
+
+void testLeadingZeroesInNumbersAreAccepted()
+{
+    // Padded columns are a normal way to align a configuration file, and they
+    // still name the same numbers. Rejecting them would be gratuitous.
+    const std::vector<AssetEntry> entries = parseAssetFile("Texture mario_run run.png\n"
+                                                          "Animation mario_running mario_run 003 005\n");
+
+    CHECK(entries.size() == 2U);
+    if (entries.size() != 2U)
+    {
+        return;
+    }
+
+    CHECK(entries[1].frameCount == 3U);
+    CHECK(entries[1].speed == 5U);
+}
+
+void testAnimationIsRejectedWhenItsTextureIsDeclaredAfterAFontOfTheSameName()
+{
+    // The name is what is matched, and only against Texture entries. A font that
+    // happens to share the name must not satisfy the reference.
+    const std::string message = errorFrom("Font shared shared.ttf\n"
+                                          "Animation wobble shared 2 4\n"
+                                          "Texture shared shared.png\n");
+
+    CHECK_STR(message, "line 2: Animation entry 'wobble' animates texture 'shared', which no earlier Texture entry "
+                       "declares; a texture must be defined before an animation that uses it");
 }
 
 void testMissingNameIsRejected()
@@ -469,11 +979,14 @@ void testFundamentalTypeErrorBeatsTokenCount()
 {
     // A line that is wrong in two ways should report the more fundamental
     // problem. Telling the user about token counts when the real issue is an
-    // unsupported keyword would send them editing whitespace for nothing.
-    const std::string message = errorFrom("Animation explosion a.png b.png\n");
+    // unrecognised keyword would send them editing whitespace for nothing. Note
+    // the keyword here is genuinely unknown, not `Animation`: the arity of a
+    // recognised type is a real question, but it is a question about a line the
+    // engine understood.
+    const std::string message = errorFrom("Sprite explosion a.png b.png c.png d.png e.png\n");
 
     CHECK(reportsLine(message, 1U));
-    CHECK(message.find("not supported yet") != std::string::npos);
+    CHECK_STR(message, "line 1: unknown asset type 'Sprite'");
 }
 
 // ---------------------------------------------------------------------------
@@ -482,57 +995,73 @@ void testFundamentalTypeErrorBeatsTokenCount()
 
 void testRealisticMixedConfiguration()
 {
-    // Shaped like a real asset file: a commented header, a blank line, a mixed
-    // run of textures and fonts, then a comment. The parser only ever sees
-    // strings here, so this test needs no file on disk.
+    // Shaped like a real asset file: a commented header, a blank line, then a
+    // mixed run of textures, animations that slice them, and fonts. The parser
+    // only ever sees strings here, so this test needs no file on disk.
     const std::vector<AssetEntry> entries = parseAssetFile("# engine asset configuration\n"
                                                           "# paths are relative to this file\n"
                                                           "\n"
                                                           "Texture player_stand library/images/megaman/megaStand.png\n"
                                                           "Texture player_run   library/images/megaman/megaRun.png\n"
+                                                          "Animation player_run_cycle player_run 3 8\n"
                                                           "Texture ground_tile  library/images/mario/ground.png\n"
+                                                          "Animation ground_still ground_tile 1 1\n"
                                                           "Texture question     library/images/mario/question.png\n"
                                                           "Texture bullet       library/images/megaman/megaBuster.png\n"
+                                                          "Animation bullet_spin bullet 2 6\n"
                                                           "\n"
                                                           "Font debug library/fonts/pixeled.ttf\n"
                                                           "Font hud library/fonts/tech.ttf\n"
-                                                          "\n"
-                                                          "# animations arrive with the animation phase\n");
+                                                          "\n");
 
-    CHECK(entries.size() == 7U);
-    if (entries.size() != 7U)
+    CHECK(entries.size() == 10U);
+    if (entries.size() != 10U)
     {
         return;
     }
 
     int textureCount = 0;
     int fontCount = 0;
+    int animationCount = 0;
     for (const AssetEntry& entry : entries)
     {
         if (entry.type == AssetType::Texture)
         {
             ++textureCount;
+            CHECK(!entry.path.empty());
+        }
+        else if (entry.type == AssetType::Font)
+        {
+            ++fontCount;
+            CHECK(!entry.path.empty());
         }
         else
         {
-            ++fontCount;
+            ++animationCount;
+            // An animation has no path, only a reference and two numbers, so the
+            // "every entry has a path" assumption this loop used to make is
+            // exactly what animation support invalidated.
+            CHECK_STR(entry.path, "");
+            CHECK(!entry.textureName.empty());
+            CHECK(entry.frameCount >= 1U);
+            CHECK(entry.speed >= 1U);
         }
 
         CHECK(!entry.name.empty());
-        CHECK(!entry.path.empty());
     }
 
     CHECK(textureCount == 5);
     CHECK(fontCount == 2);
+    CHECK(animationCount == 3);
 
     // The aligned column layout must not leak into the names, and the first and
     // last real entries must be where a reader expects them.
     CHECK_STR(entries[0].name, "player_stand");
     CHECK_STR(entries[0].path, "library/images/megaman/megaStand.png");
-    CHECK_STR(entries[4].name, "bullet");
-    CHECK_STR(entries[4].path, "library/images/megaman/megaBuster.png");
-    CHECK_STR(entries[5].name, "debug");
-    CHECK_STR(entries[6].name, "hud");
+    CHECK_STR(entries[6].name, "bullet");
+    CHECK_STR(entries[6].path, "library/images/megaman/megaBuster.png");
+    CHECK_STR(entries[8].name, "debug");
+    CHECK_STR(entries[9].name, "hud");
 }
 
 // ---------------------------------------------------------------------------
@@ -633,8 +1162,44 @@ int main()
         {"entries are independent of prior calls", &testEntriesAreIndependentOfPriorCalls},
         {"windows line endings parse the same", &testWindowsLineEndingsParseTheSame},
         {"unknown asset type is rejected", &testUnknownAssetTypeIsRejected},
-        {"animation is rejected as unsupported", &testAnimationIsRejectedAsUnsupported},
+        {"animation entry parses every field", &testAnimationEntryParsesEveryField},
+        {"animation entry has no path", &testAnimationEntryHasNoPath},
+        {"texture and font entries carry no animation fields", &testTextureAndFontEntriesCarryNoAnimationFields},
+        {"animation must follow its texture", &testAnimationMustFollowItsTexture},
+        {"animation with unknown texture is rejected", &testAnimationWithUnknownTextureIsRejected},
+        {"animation cannot animate a font", &testAnimationCannotAnimateAFont},
+        {"animation cannot animate another animation", &testAnimationCannotAnimateAnotherAnimation},
+        {"animation with two textures picks the earlier one", &testAnimationWithTwoTexturesPicksTheEarlierOne},
+        {"animation missing name is rejected", &testAnimationMissingNameIsRejected},
+        {"animation missing texture name is rejected", &testAnimationMissingTextureNameIsRejected},
+        {"animation missing frame count is rejected", &testAnimationMissingFrameCountIsRejected},
+        {"animation missing speed is rejected", &testAnimationMissingSpeedIsRejected},
+        {"animation with too many tokens is rejected", &testAnimationWithTooManyTokensIsRejected},
+        {"animation rejects zero frame count", &testAnimationRejectsZeroFrameCount},
+        {"animation rejects zero speed", &testAnimationRejectsZeroSpeed},
+        {"animation rejects non numeric frame count", &testAnimationRejectsNonNumericFrameCount},
+        {"animation rejects non numeric speed", &testAnimationRejectsNonNumericSpeed},
+        {"animation rejects partially numeric field", &testAnimationRejectsPartiallyNumericField},
+        {"animation rejects negative numbers", &testAnimationRejectsNegativeNumbers},
+        {"animation rejects oversized frame count", &testAnimationRejectsOversizedFrameCount},
+        {"animation accepts frame count beyond thirty two bits", &testAnimationRejectsFrameCountBeyondThirtyTwoBits},
+        {"animation name is unique against a texture", &testAnimationNameIsUniqueAgainstATexture},
+        {"animation name is unique against a font", &testAnimationNameIsUniqueAgainstAFont},
+        {"animation name is unique against another animation", &testAnimationNameIsUniqueAgainstAnotherAnimation},
+        {"texture name is unique against an animation", &testTextureNameIsUniqueAgainstAnAnimation},
         {"animation error names the line number", &testAnimationErrorNamesTheLineNumber},
+        {"animation error beats the texture check", &testAnimationErrorIsReportedBeforeTheTextureIsChecked},
+        {"animation error beats a duplicate name", &testAnimationErrorIsReportedBeforeADuplicateName},
+        {"malformed animation stops parsing at that line", &testMalformedAnimationStopsParsingAtThatLine},
+        {"trailing comment is still rejected on an animation line", &testTrailingCommentIsStillRejectedOnAnAnimationLine},
+        {"comments and blanks around animations are ignored", &testCommentsAndBlanksAroundAnimationsAreIgnored},
+        {"animations interleave with every other kind", &testAnimationsInterleaveWithEveryOtherKind},
+        {"several animations share one texture", &testSeveralAnimationsShareOneTexture},
+        {"single frame animation is accepted", &testSingleFrameAnimationIsAccepted},
+        {"animation does not affect texture or font parsing", &testAnimationDoesNotAffectTextureOrFontParsing},
+        {"windows line endings parse animations too", &testWindowsLineEndingsParseAnimationsToo},
+        {"leading zeroes in numbers are accepted", &testLeadingZeroesInNumbersAreAccepted},
+        {"animation is rejected when a font shadows the texture name", &testAnimationIsRejectedWhenItsTextureIsDeclaredAfterAFontOfTheSameName},
         {"missing name is rejected", &testMissingNameIsRejected},
         {"blank name is rejected", &testBlankNameIsRejected},
         {"missing path is rejected", &testMissingPathIsRejected},
