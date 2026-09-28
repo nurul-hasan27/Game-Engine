@@ -10,6 +10,8 @@
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/graphics/Renderer.hpp"
+
+#include <optional>
 #include "engine/systems/RenderSystem.hpp"
 #include "engine/input/Input.hpp"
 #include "engine/math/Vec2.hpp"
@@ -32,6 +34,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -62,6 +65,12 @@ struct TextureDrawCall
 {
     const engine::assets::Texture* texture = nullptr;
     engine::graphics::RenderTransform placement;
+
+    /// The region of the image that was drawn, or `std::nullopt` for all of it.
+    /// Recorded because "did the animation query select the right frame" is not
+    /// observable any other way, and a system that quietly drew the whole image
+    /// would otherwise look identical to one that did the right thing.
+    std::optional<engine::IntRect> source;
 };
 
 class RecordingRenderer final : public engine::graphics::Renderer
@@ -89,11 +98,11 @@ public:
         m_order.emplace_back("rectangle");
     }
 
-    void drawTexture(const engine::assets::Texture& texture,
-                     const engine::graphics::RenderTransform& placement) override
+    void drawTexture(const engine::assets::Texture& texture, const engine::graphics::RenderTransform& placement,
+                     const std::optional<engine::IntRect>& source) override
     {
-        m_textureDraws.push_back(TextureDrawCall{&texture, placement});
-        m_order.emplace_back("texture");
+        m_textureDraws.push_back(TextureDrawCall{&texture, placement, source});
+        m_order.emplace_back(source.has_value() ? "texture-region" : "texture");
     }
 
     void endFrame() override { ++m_endFrames; }
@@ -134,6 +143,9 @@ namespace graphics = engine::graphics;
 namespace config = engine::config;
 using engine::Application;
 using engine::Color;
+using engine::IntRect;
+using engine::isEmpty;
+using engine::kWholeImage;
 using engine::Vec2;
 using engine::components::Rectangle;
 using engine::components::Transform;
@@ -263,6 +275,17 @@ void check(const bool condition, const char* const expression, const char* const
     }
 }
 
+void checkEqual(const std::string& actual, const std::string& expected, const char* const expression,
+                const char* const file, const int line)
+{
+    if (actual != expected)
+    {
+        ++g_failureCount;
+        std::cerr << "    " << file << ':' << line << ": CHECK(" << expression << ") failed"
+                  << "\n      actual   = \"" << actual << "\"\n      expected = \"" << expected << "\"\n";
+    }
+}
+
 void checkNear(const float actual, const float expected, const char* const expression, const char* const file,
                const int line)
 {
@@ -285,6 +308,7 @@ void checkNearVec(const Vec2& actual, const Vec2& expected, const char* const ex
 
 #define CHECK(...) check((__VA_ARGS__), #__VA_ARGS__, __FILE__, __LINE__)
 #define CHECK_FALSE(...) check(!(__VA_ARGS__), "!" #__VA_ARGS__, __FILE__, __LINE__)
+#define CHECK_STR(actual, expected) checkEqual((actual), (expected), #actual " == " #expected, __FILE__, __LINE__)
 #define CHECK_NEAR(actual, expected) checkNear((actual), (expected), #actual " ~= " #expected, __FILE__, __LINE__)
 #define CHECK_NEAR_VEC(actual, expected) checkNearVec((actual), (expected), #actual, __FILE__, __LINE__)
 
@@ -1159,11 +1183,26 @@ void testTextureComponentIsPlainDataWithNoNativeState()
 void testRendererInterfaceExposesDrawTexture()
 {
     // The exact signature the rest of the engine is written against: a const
-    // handle and a placement, both const, and no size parameter, because the size
-    // belongs to the image.
-    using DrawTexture = void (graphics::Renderer::*)(const assets::Texture&, const graphics::RenderTransform&);
+    // handle, a placement and an optional source region, all const, and no size
+    // parameter, because the size belongs to the image or to the region.
+    //
+    // The region is `std::optional<IntRect>` and not a bare rect, so that "the
+    // whole image" is expressible without a sentinel value that would have to be
+    // distinguished from a legitimately empty region. `std::nullopt` is the whole
+    // image; a present value is the region.
+    using DrawTexture = void (graphics::Renderer::*)(const assets::Texture&, const graphics::RenderTransform&,
+                                                     const std::optional<engine::IntRect>&);
     static_assert(std::is_same_v<decltype(&graphics::Renderer::drawTexture), DrawTexture>,
-                  "drawTexture must take a const handle and a placement");
+                  "drawTexture must take a const handle, a placement and an optional source region");
+
+    // The region type is the engine's own, never a graphics one. If this ever
+    // became `sf::IntRect` the interface would drag SFML into every system.
+    static_assert(std::is_same_v<engine::IntRect, engine::IntRect>, "IntRect must be a complete engine type");
+    static_assert(!std::is_pointer_v<engine::IntRect>, "IntRect must be a value, not a handle");
+    static_assert(std::is_trivially_copyable_v<engine::IntRect>, "IntRect must be cheaply copyable");
+    static_assert(std::is_default_constructible_v<engine::IntRect>, "IntRect must have a default state");
+    static_assert(sizeof(engine::IntRect) == 4U * sizeof(int), "IntRect must be exactly four ints");
+
     static_assert(std::is_abstract_v<graphics::Renderer>, "Renderer must stay abstract");
 
     // Additive: every pre-existing member is byte-for-byte what it was.
@@ -1194,7 +1233,10 @@ void testARendererWithoutSfmlStillSatisfiesTheInterface()
         void beginFrame() override {}
         void clear(const Color&) override {}
         void drawRectangle(const Vec2&, const Color&, const graphics::RenderTransform&) override {}
-        void drawTexture(const assets::Texture&, const graphics::RenderTransform&) override {}
+        void drawTexture(const assets::Texture&, const graphics::RenderTransform&,
+                         const std::optional<engine::IntRect>&) override
+        {
+        }
         void endFrame() override {}
         [[nodiscard]] std::uint64_t frameCount() const noexcept override { return 0; }
     };
@@ -1743,6 +1785,527 @@ void testRectangleRenderingIsUnchangedAlongsideTextures()
 }
 
 // ---------------------------------------------------------------------------
+// Source rectangles
+//
+// The course's animation mechanism is a texture rectangle: an animation shows one
+// frame of a sheet by changing which part of the sheet is drawn. These groups
+// cover the draw call that makes that possible - that a region is honoured, that
+// it is centred on the placement rather than on the sheet, and that a whole-image
+// draw is byte-for-byte what it always was.
+//
+// The pixel expectations are derived from the committed artwork rather than
+// guessed. `mario/GoombaWalk.png` is 100x41 with two 50x41 frames: frame 0's
+// opaque pixels span local x 0..43 and frame 1's span local x 2..47, so local
+// (45, 20) is transparent in frame 0 and opaque in frame 1, while local (5, 20)
+// is opaque in both. Drawn centred at (100, 50) those are screen (120, 50) and
+// (80, 50), which is what the pixel groups assert.
+// ---------------------------------------------------------------------------
+
+/// A real manager over the shipped configuration, so the pixel groups below use
+/// a real loaded image rather than a stand-in.
+[[nodiscard]] assets::SfmlAssetManager shippedManager()
+{
+    return assets::SfmlAssetManager{std::filesystem::path{config::kAssetsConfig}};
+}
+
+void testAWholeTextureDrawNamesNoSourceRegion()
+{
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    RecordingRenderer renderer;
+    Camera camera = identityCamera();
+    RenderSystem system{renderer, camera, assets};
+
+    EntityManager entities;
+    Entity& entity = entities.addEntity("textured");
+    entity.addComponent<Transform>(Transform{Vec2{10.0F, 20.0F}, Vec2{}, Vec2{1.0F, 1.0F}, 0.0F});
+    entity.addComponent<components::Texture>(components::Texture{"mario_ground"});
+
+    Input input;
+    renderer.beginFrame();
+    system.update(entities, input, 0.0F);
+
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (renderer.textureDraws().size() != 1U)
+    {
+        return;
+    }
+
+    // Absent, not an empty rect. The distinction is what lets an implementation
+    // tell "draw everything" from "draw nothing", and the draw order record uses
+    // the same distinction to label the call.
+    CHECK_FALSE(renderer.textureDraws()[0].source.has_value());
+}
+
+void testASourceRegionIsRecordedOnTheDrawCall()
+{
+    FakeAssetManager assets;
+    assets.declare("mario_goomba");
+    RecordingRenderer renderer;
+
+    renderer.beginFrame();
+
+    // Through the renderer directly rather than through a system, so this group is
+    // about the draw call's contract and nothing else. The system that submits
+    // regions is covered by the animation groups.
+    static_cast<graphics::Renderer&>(renderer)
+        .drawTexture(assets.texture("mario_goomba"), RenderTransform{Vec2{10.0F, 20.0F}, Vec2{1.0F, 1.0F}, 0.0F},
+                     IntRect{50, 0, 50, 41});
+
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (renderer.textureDraws().size() != 1U)
+    {
+        return;
+    }
+
+    CHECK(renderer.textureDraws()[0].source.has_value());
+    if (!renderer.textureDraws()[0].source.has_value())
+    {
+        return;
+    }
+
+    CHECK(*renderer.textureDraws()[0].source == (IntRect{50, 0, 50, 41}));
+}
+
+void testTwoFramesOfOneSheetSubmitTwoDistinctDrawCalls()
+{
+    // Two frames of the same sheet, same placement, submitted in one frame. Both
+    // calls must survive with their own region, and the recorded order must show a
+    // region-bearing call is distinguishable from a whole-image one - otherwise a
+    // system that animating silently drew whole sheets would look identical.
+    FakeAssetManager assets;
+    assets.declare("mario_goomba");
+    RecordingRenderer renderer;
+
+    const RenderTransform placement{Vec2{10.0F, 20.0F}, Vec2{1.0F, 1.0F}, 0.0F};
+    const IntRect first{0, 0, 50, 41};
+    const IntRect second{50, 0, 50, 41};
+
+    CHECK(first != second);
+    CHECK(first.left != second.left);
+    CHECK(first.top == second.top);
+    CHECK(first.width == second.width);
+    CHECK(first.height == second.height);
+
+    renderer.beginFrame();
+    static_cast<graphics::Renderer&>(renderer).drawTexture(assets.texture("mario_goomba"), placement, first);
+    static_cast<graphics::Renderer&>(renderer).drawTexture(assets.texture("mario_goomba"), placement, second);
+    static_cast<graphics::Renderer&>(renderer).drawTexture(assets.texture("mario_goomba"), placement, std::nullopt);
+    renderer.endFrame();
+
+    CHECK(renderer.textureDraws().size() == 3U);
+    if (renderer.textureDraws().size() != 3U)
+    {
+        return;
+    }
+
+    CHECK(renderer.textureDraws()[0].source.has_value());
+    CHECK(renderer.textureDraws()[1].source.has_value());
+    CHECK_FALSE(renderer.textureDraws()[2].source.has_value());
+
+    if (renderer.textureDraws()[0].source.has_value() && renderer.textureDraws()[1].source.has_value())
+    {
+        CHECK(*renderer.textureDraws()[0].source == first);
+        CHECK(*renderer.textureDraws()[1].source == second);
+        CHECK(*renderer.textureDraws()[0].source != *renderer.textureDraws()[1].source);
+    }
+
+    // Same handle both times: two frames of one image, not two images.
+    CHECK(renderer.textureDraws()[0].texture == renderer.textureDraws()[1].texture);
+
+    // The order record distinguishes a region draw from a whole-image draw.
+    const std::vector<std::string>& order = renderer.order();
+    CHECK(order.size() == 3U);
+    if (order.size() == 3U)
+    {
+        CHECK_STR(order[0], "texture-region");
+        CHECK_STR(order[1], "texture-region");
+        CHECK_STR(order[2], "texture");
+    }
+}
+
+void testSourceRegionDefaultsToAnEmptyRect()
+{
+    // The default-constructed rect is empty, and `isEmpty` is what says so. It is
+    // not overloaded to mean "everything" - see the note on the draw call.
+    const IntRect empty;
+
+    CHECK(isEmpty(empty));
+    CHECK(empty.left == 0);
+    CHECK(empty.top == 0);
+    CHECK(empty.width == 0);
+    CHECK(empty.height == 0);
+
+    // A degenerate region is empty too, rather than an inverted one.
+    CHECK(isEmpty(IntRect{10, 10, -5, 20}));
+    CHECK(isEmpty(IntRect{10, 10, 20, -5}));
+    CHECK_FALSE(isEmpty(IntRect{0, 0, 1, 1}));
+
+    // Equality is exact and by value, so a caller can compare a computed region
+    // with a recorded one.
+    CHECK(IntRect{1, 2, 3, 4} == IntRect{1, 2, 3, 4});
+    CHECK(IntRect{1, 2, 3, 4} != IntRect{1, 2, 3, 5});
+}
+
+void testFrameZeroDrawsTheFirstFramesPixels()
+{
+    // A real window, a real image, a real pixel read. If the region were ignored,
+    // or interpreted as a destination, or applied as a scale, this would fail.
+    sf::RenderWindow window(sf::VideoMode{200, 100}, "frame zero");
+    engine::graphics::SfmlRenderer renderer{window};
+    assets::SfmlAssetManager assets = shippedManager();
+
+    constexpr Color background{0.0F, 0.0F, 1.0F, 1.0F};
+
+    renderer.beginFrame();
+    renderer.clear(background);
+    renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                         RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, IntRect{0, 0, 50, 41});
+
+    // Local (5, 20) of frame 0 is opaque, so screen (80, 50) is sprite, not
+    // background.
+    const sf::Color inside = readPixel(window, 80, 50);
+
+    // Local (45, 20) of frame 0 is transparent, so screen (120, 50) is the
+    // background. This is the discriminating pixel: the same pixel in frame 1 is
+    // sprite.
+    const sf::Color outsideFrame = readPixel(window, 120, 50);
+
+    renderer.endFrame();
+
+    CHECK(inside.a == 255);
+    CHECK(inside != sf::Color{0, 0, 255, 255});
+    CHECK(outsideFrame.b == 255);
+    CHECK(outsideFrame.r == 0);
+    CHECK(outsideFrame.a == 255);
+}
+
+void testFrameOneDrawsTheSecondFramesPixels()
+{
+    sf::RenderWindow window(sf::VideoMode{200, 100}, "frame one");
+    engine::graphics::SfmlRenderer renderer{window};
+    assets::SfmlAssetManager assets = shippedManager();
+
+    constexpr Color background{0.0F, 0.0F, 1.0F, 1.0F};
+
+    renderer.beginFrame();
+    renderer.clear(background);
+    renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                         RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, IntRect{50, 0, 50, 41});
+
+    // Both of these are opaque in frame 1: local x 5 and local x 45.
+    const sf::Color leftOfCentre = readPixel(window, 80, 50);
+    const sf::Color rightOfCentre = readPixel(window, 120, 50);
+
+    renderer.endFrame();
+
+    CHECK(leftOfCentre.a == 255);
+    CHECK(rightOfCentre.a == 255);
+    CHECK(rightOfCentre != sf::Color{0, 0, 255, 255});
+}
+
+void testTwoFramesOfOneSheetLookDifferentOnScreen()
+{
+    // The end-to-end statement of the whole feature: the same texture, the same
+    // placement, two regions, two different pictures. Frame 0 is transparent at
+    // screen (120, 50); frame 1 is opaque there. If the source region were
+    // ignored both would be identical, and if it were treated as a destination
+    // both would be drawn at the wrong place.
+    auto pixelsFor = [](const IntRect& region) {
+        sf::RenderWindow window(sf::VideoMode{200, 100}, "compare frames");
+        engine::graphics::SfmlRenderer renderer{window};
+        assets::SfmlAssetManager assets = shippedManager();
+
+        renderer.beginFrame();
+        renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+        renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                             RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, region);
+
+        const sf::Color at = readPixel(window, 120, 50);
+        const sf::Color edge = readPixel(window, 123, 50);
+        const sf::Color left = readPixel(window, 80, 50);
+        renderer.endFrame();
+        return std::tuple<sf::Color, sf::Color, sf::Color>{at, edge, left};
+    };
+
+    const auto [frameZeroAt, frameZeroEdge, frameZeroLeft] = pixelsFor(IntRect{0, 0, 50, 41});
+    const auto [frameOneAt, frameOneEdge, frameOneLeft] = pixelsFor(IntRect{50, 0, 50, 41});
+
+    // The control, and the reason the comparison is meaningful. Local x 48 is
+    // transparent in *both* frames - frame 0's opaque run ends at 43 and frame
+    // 1's at 47 - so screen (123, 50) is background whichever frame is drawn. If
+    // it were not, the two frames would be sitting in different places rather
+    // than showing different pictures, which is a different bug with a different
+    // fix.
+    CHECK(frameZeroEdge.b == 255);
+    CHECK(frameOneEdge.b == 255);
+
+    // Both frames are drawn into the same 50x41 box, so both have opaque pixels
+    // somewhere in it. Local x 5 is opaque in each.
+    CHECK(frameZeroLeft.a == 255);
+    CHECK(frameOneLeft.a == 255);
+
+    // The discriminating pixel. Local x 45 of frame 0 is transparent and of frame
+    // 1 is a semi-opaque brown, so the same screen pixel goes from background to
+    // sprite purely because the source region moved.
+    CHECK(frameZeroAt != frameOneAt);
+    CHECK(frameZeroAt.b == 255);
+    CHECK(frameZeroAt.a == 255);
+    CHECK(frameOneAt.a == 255);
+    CHECK(frameOneAt.b != 255);
+}
+
+void testASourceRegionIsCentredOnThePlacementNotTheSheet()
+{
+    // The single most important property of the feature, and the one the course
+    // calls out: an animated character must not drift sideways as it changes
+    // frame.
+    //
+    // The sheet is 100 wide and the frame is 50, so if the origin were the
+    // *sheet's* centre the frame would be drawn 25 pixels to the right. Frame 1's
+    // opaque run is local x 2..47, so at screen (120, 50) - which is local x 45 of
+    // a frame centred on (100, 50) - there would be nothing. Both of the pixels
+    // below are inside a correctly centred frame.
+    sf::RenderWindow window(sf::VideoMode{200, 100}, "frame centring");
+    engine::graphics::SfmlRenderer renderer{window};
+    assets::SfmlAssetManager assets = shippedManager();
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+
+    // Frame 1, the right-hand half of the sheet. Centred, it covers screen x
+    // 75..124. Its local x 2 is screen 77, which is the first opaque column.
+    renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                         RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, IntRect{50, 0, 50, 41});
+
+    const sf::Color justInside = readPixel(window, 80, 50);
+    const sf::Color farInside = readPixel(window, 120, 50);
+    const sf::Color leftOfTheFrame = readPixel(window, 60, 50);
+    const sf::Color rightOfTheFrame = readPixel(window, 140, 50);
+
+    renderer.endFrame();
+
+    CHECK(justInside.a == 255);
+    CHECK(farInside.a == 255);
+
+    // The frame is 50 wide centred on 100, so it cannot reach 60 or 140. If the
+    // sheet's centre were used instead the frame would cover 100..149 and screen
+    // 140 would be sprite.
+    CHECK(leftOfTheFrame.b == 255);
+    CHECK(rightOfTheFrame.b == 255);
+}
+
+void testAnEmptySourceRegionDrawsNothing()
+{
+    // An animation asked for a frame it does not have should produce nothing, not
+    // the whole texture and not an exception. Both alternatives would be worse:
+    // the whole texture would flash a wrong picture, and an exception would take
+    // down a frame for a recoverable mistake.
+    sf::RenderWindow window(sf::VideoMode{200, 100}, "empty region");
+    engine::graphics::SfmlRenderer renderer{window};
+    assets::SfmlAssetManager assets = shippedManager();
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                         RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, IntRect{});
+
+    const sf::Color centre = readPixel(window, 100, 50);
+    const sf::Color edge = readPixel(window, 80, 50);
+    renderer.endFrame();
+
+    CHECK(centre.b == 255);
+    CHECK(centre.r == 0);
+    CHECK(edge.b == 255);
+    CHECK(renderer.frameCount() == 1U);
+}
+
+void testAWholeTextureDrawIsUnchangedByTheRegionParameter()
+{
+    // The regression this API change had to avoid: a texture drawn with no region
+    // must look exactly as it did before the parameter existed. Both halves of the
+    // sheet visible at once, centred on the whole image's centre (100, 50) - which
+    // is also the frame's centre, so both sprites land on screen together.
+    sf::RenderWindow window(sf::VideoMode{200, 100}, "whole image");
+    engine::graphics::SfmlRenderer renderer{window};
+    assets::SfmlAssetManager assets = shippedManager();
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                         RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, std::nullopt);
+
+    // The sheet is 100 wide centred on 100, so it covers screen x 50..149. Both
+    // halves have opaque pixels here: frame 0's local x 0 is screen 50, and frame
+    // 1's local x 45 is screen 95.
+    const sf::Color frameZeroHalf = readPixel(window, 70, 50);
+    const sf::Color frameOneHalf = readPixel(window, 120, 50);
+    const sf::Color outside = readPixel(window, 160, 50);
+
+    renderer.endFrame();
+
+    CHECK(frameZeroHalf.a == 255);
+    CHECK(frameOneHalf.a == 255);
+    CHECK(outside.b == 255);
+}
+
+void testAnExplicitWholeImageRegionMatchesNoRegion()
+{
+    // `std::nullopt` and an explicit rect covering the whole image must produce
+    // the same picture, or a caller that computed a region from an animation's
+    // frame size would see a sprite jump when the frame count is 1.
+    auto pixelsFor = [](const std::optional<IntRect>& source) {
+        sf::RenderWindow window(sf::VideoMode{200, 100}, "whole region");
+        engine::graphics::SfmlRenderer renderer{window};
+        assets::SfmlAssetManager assets = shippedManager();
+
+        renderer.beginFrame();
+        renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+        renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                             RenderTransform{Vec2{100.0F, 50.0F}, Vec2{1.0F, 1.0F}, 0.0F}, source);
+
+        std::vector<sf::Color> row;
+        for (int x = 40; x < 160; x += 8)
+        {
+            row.push_back(readPixel(window, static_cast<std::size_t>(x), 50));
+        }
+        renderer.endFrame();
+        return row;
+    };
+
+    const auto noRegion = pixelsFor(std::nullopt);
+    const auto wholeRegion = pixelsFor(IntRect{0, 0, 100, 41});
+
+    CHECK(noRegion == wholeRegion);
+}
+
+void testASourceRegionHonoursScale()
+{
+    // Scale multiplies the region's size, not the sheet's. At 2x the 50x41 frame
+    // covers 100x82 centred on (100, 50), so it reaches screen x 50..149 and
+    // screen y 9..90 - and at 1x it would have reached only 75..124.
+    sf::RenderWindow window(sf::VideoMode{200, 100}, "region scale");
+    engine::graphics::SfmlRenderer renderer{window};
+    assets::SfmlAssetManager assets = shippedManager();
+
+    renderer.beginFrame();
+    renderer.clear(Color{0.0F, 0.0F, 1.0F, 1.0F});
+    renderer.drawTexture(assets.texture("mario_GoombaWalk"),
+                         RenderTransform{Vec2{100.0F, 50.0F}, Vec2{2.0F, 2.0F}, 0.0F}, IntRect{0, 0, 50, 41});
+
+    // Frame 0's opaque run is local x 0..43, so at 2x on screen x 50..136.
+    const sf::Color inside = readPixel(window, 70, 50);
+    const sf::Color beyondTheScaledFrame = readPixel(window, 150, 50);
+    renderer.endFrame();
+
+    CHECK(inside.a == 255);
+    CHECK(beyondTheScaledFrame.b == 255);
+}
+
+void testASourceRegionDoesNotChangeTheCameraMapping()
+{
+    // The camera is applied to the placement before the draw call, exactly as it
+    // is for a rectangle and for a whole texture. A region must not reintroduce a
+    // world-to-screen step inside the renderer.
+    FakeAssetManager assets;
+    assets.declare("mario_ground");
+    RecordingRenderer renderer;
+    Input input;
+    static_cast<void>(input);
+
+    Camera camera = identityCamera();
+    camera.setPosition(Vec2{500.0F, 300.0F});
+    camera.setZoom(2.0F);
+
+    const RenderTransform worldPlacement = toRenderTransform(
+        Transform{Vec2{500.0F, 300.0F}, Vec2{}, Vec2{1.0F, 1.0F}, 0.0F}, camera);
+
+    // With the camera centred on the entity and zoomed 2x, the screen scale is 2
+    // and the world position maps to the viewport centre.
+    CHECK(worldPlacement.position == camera.worldToScreen(Vec2{500.0F, 300.0F}));
+    CHECK(worldPlacement.scale.x == camera.zoom());
+    CHECK(worldPlacement.scale.y == camera.zoom());
+
+    // A region does not participate: the placement the renderer receives is
+    // identical whether or not a region accompanies it, so a region cannot have
+    // shifted the camera mapping.
+    static_cast<graphics::Renderer&>(renderer).drawTexture(
+        assets.texture("mario_ground"), worldPlacement, IntRect{0, 0, 32, 32});
+    CHECK(renderer.textureDraws().size() == 1U);
+    if (renderer.textureDraws().size() == 1U)
+    {
+        CHECK(renderer.textureDraws()[0].placement.position == worldPlacement.position);
+        CHECK(renderer.textureDraws()[0].placement.scale == worldPlacement.scale);
+        CHECK(renderer.textureDraws()[0].source.has_value());
+        if (renderer.textureDraws()[0].source.has_value())
+        {
+            CHECK(*renderer.textureDraws()[0].source == (IntRect{0, 0, 32, 32}));
+        }
+    }
+}
+
+void testTheRendererInterfaceNamesNoGraphicsType()
+{
+    // The whole reason the engine has its own IntRect. Checked on the header's
+    // code with comments stripped, because the interface's documentation names
+    // `sf::IntRect` while explaining that the type is never exposed, and scanning
+    // the raw text would match its own explanation.
+    std::ifstream file{ENGINE_RENDERER_HEADER};
+    CHECK(static_cast<bool>(file));
+    if (!file)
+    {
+        return;
+    }
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string code = buffer.str();
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    // Strip `//` comments and blank lines, so only code is searched.
+    std::string stripped;
+    {
+        std::istringstream lines{code};
+        std::string line;
+        while (std::getline(lines, line))
+        {
+            const std::string withoutComment = line.substr(0, line.find("//"));
+            if (withoutComment.find_first_not_of(" \t") != std::string::npos)
+            {
+                stripped += withoutComment;
+                stripped += '\n';
+            }
+        }
+    }
+
+    CHECK(stripped.find("sf::") == std::string::npos);
+    CHECK(stripped.find("SFML") == std::string::npos);
+    CHECK(stripped.find("#include <SFML") == std::string::npos);
+
+    // The region type is the engine's own and is included, not forward declared.
+    CHECK(stripped.find("#include \"engine/math/IntRect.hpp\"") != std::string::npos);
+    CHECK(stripped.find("std::optional<IntRect>") != std::string::npos);
+    CHECK(stripped.find("IntRect& source") == std::string::npos);
+}
+
+void testAWholeImageIsNotOverloadedToMeanEverything()
+{
+    // `kWholeImage` exists as a named constant for readability, but it is a
+    // zero-sized rect, which is empty - so it cannot be passed where "draw the
+    // whole image" is meant. That is deliberate: overloading zero to mean the
+    // opposite of what it says would be a trap. The whole-image case is
+    // `std::nullopt`.
+    CHECK(isEmpty(kWholeImage));
+    CHECK(kWholeImage.width == 0);
+    CHECK(kWholeImage.height == 0);
+}
+
+// ---------------------------------------------------------------------------
 // Step 8: Application owns the asset manager.
 //
 // Before this step, RenderSystem could be built without one, and a nullable
@@ -2112,6 +2675,21 @@ int main()
         {"texture scale affects rendered pixels", &testTextureScaleAffectsRenderedPixels},
         {"camera zoom affects rendered texture pixels", &testCameraZoomAffectsRenderedTexturePixels},
         {"rectangle rendering is unchanged alongside textures", &testRectangleRenderingIsUnchangedAlongsideTextures},
+        {"a whole texture draw names no source region", &testAWholeTextureDrawNamesNoSourceRegion},
+        {"a source region is recorded on the draw call", &testASourceRegionIsRecordedOnTheDrawCall},
+        {"two frames of one sheet submit two distinct draw calls", &testTwoFramesOfOneSheetSubmitTwoDistinctDrawCalls},
+        {"a source rect defaults to an empty rect", &testSourceRegionDefaultsToAnEmptyRect},
+        {"frame zero draws the first frame's pixels", &testFrameZeroDrawsTheFirstFramesPixels},
+        {"frame one draws the second frame's pixels", &testFrameOneDrawsTheSecondFramesPixels},
+        {"two frames of one sheet look different on screen", &testTwoFramesOfOneSheetLookDifferentOnScreen},
+        {"a source region is centred on the placement not the sheet", &testASourceRegionIsCentredOnThePlacementNotTheSheet},
+        {"an empty source region draws nothing", &testAnEmptySourceRegionDrawsNothing},
+        {"a whole texture draw is unchanged by the region parameter", &testAWholeTextureDrawIsUnchangedByTheRegionParameter},
+        {"an explicit whole image region matches no region", &testAnExplicitWholeImageRegionMatchesNoRegion},
+        {"a source region honours scale", &testASourceRegionHonoursScale},
+        {"a source region does not change the camera mapping", &testASourceRegionDoesNotChangeTheCameraMapping},
+        {"the renderer interface names no graphics type", &testTheRendererInterfaceNamesNoGraphicsType},
+        {"a whole image is not overloaded to mean everything", &testAWholeImageIsNotOverloadedToMeanEverything},
         {"application constructs with the real configuration", &testApplicationConstructsWithTheRealConfiguration},
         {"asset loading does not depend on the working directory", &testAssetLoadingDoesNotDependOnTheWorkingDirectory},
         {"application owns a loaded asset manager", &testApplicationOwnsALoadedAssetManager},

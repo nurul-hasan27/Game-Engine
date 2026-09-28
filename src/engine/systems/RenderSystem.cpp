@@ -5,6 +5,8 @@
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
 
+#include <optional>
+
 namespace engine::systems
 {
 
@@ -56,8 +58,12 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, input::Input& in
         // not declared throws from the lookup, and is deliberately not caught: an
         // entity that silently draws nothing is a bug that surfaces much later,
         // as a missing sprite with nothing pointing at the cause.
+        //
+        // No source region: a plain texture is drawn whole, exactly as it always
+        // was. An entity that animates is drawn by the third query below instead,
+        // which names a region.
         m_renderer->drawTexture(m_assets.texture(texture.assetName),
-                                 graphics::toRenderTransform(transform, *m_camera));
+                                 graphics::toRenderTransform(transform, *m_camera), std::nullopt);
     }
 }
 

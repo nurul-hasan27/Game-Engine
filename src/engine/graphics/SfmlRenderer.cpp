@@ -89,7 +89,8 @@ void SfmlRenderer::drawRectangle(const Vec2& size, const Color& color, const Ren
     m_window->draw(shape, statesFor(placement));
 }
 
-void SfmlRenderer::drawTexture(const assets::Texture& texture, const RenderTransform& placement)
+void SfmlRenderer::drawTexture(const assets::Texture& texture, const RenderTransform& placement,
+                               const std::optional<IntRect>& source)
 {
     // An empty handle has no pixels. Drawing nothing would be a silent failure
     // that shows up much later as a missing sprite with no explanation, so this
@@ -102,11 +103,34 @@ void SfmlRenderer::drawTexture(const assets::Texture& texture, const RenderTrans
     const sf::Texture& native = texture.m_impl->native;
     const sf::Vector2u size = native.getSize();
 
-    // The whole image, centred, the same convention as a rectangle. No source
-    // rectangle: frames are a later concern and there is nothing to select one
-    // from yet.
+    // The whole image unless a region was named. An empty region draws nothing,
+    // which is a legitimate thing for a caller to ask for - an animation asked for
+    // a frame it does not have should produce nothing rather than the whole
+    // texture, and it is not worth an exception.
+    const IntRect region = source.value_or(IntRect{0, 0, static_cast<int>(size.x), static_cast<int>(size.y)});
+
+    if (isEmpty(region))
+    {
+        return;
+    }
+
     sf::Sprite sprite{native};
-    sprite.setOrigin(sf::Vector2f{static_cast<float>(size.x) * 0.5F, static_cast<float>(size.y) * 0.5F});
+
+    // The origin moves to the middle of the region being drawn, not the middle of
+    // the image. This is the whole difference between a sprite and an animation of
+    // it: a sprite sheet is one image holding many frames, and each frame has to be
+    // centred on the entity rather than the sheet, or an animated character would
+    // shift sideways every time it changed frame.
+    //
+    // For a whole-image draw the region is the image, so this is the same origin
+    // the previous single-rectangle path computed. Nothing that used to be drawn
+    // moves by a pixel.
+    sprite.setOrigin(sf::Vector2f{static_cast<float>(region.width) * 0.5F,
+                                  static_cast<float>(region.height) * 0.5F});
+
+    // The one place `engine::IntRect` becomes `sf::IntRect`. Above this line the
+    // engine has no graphics types at all.
+    sprite.setTextureRect(sf::IntRect{region.left, region.top, region.width, region.height});
 
     // Same states function as the rectangle, so a sprite and a rectangle at the
     // same placement land in the same place at the same size.

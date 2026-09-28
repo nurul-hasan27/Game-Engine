@@ -255,7 +255,8 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_APPLICATION_HEADER="${PROJECT_SOURCE_DIR}/include/engine/Application.hpp"
         ENGINE_APPLICATION_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/Application.cpp"
         ENGINE_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/RenderSystem.hpp"
-        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp")
+        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp"
+        ENGINE_RENDERER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/graphics/Renderer.hpp")
     add_test(NAME render.foundation COMMAND render_test)
     set_tests_properties(render.foundation PROPERTIES TIMEOUT 60)
 
