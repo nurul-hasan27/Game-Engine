@@ -1,0 +1,68 @@
+# Demonstration level, in the format the assignment specifies.
+#
+#   Tile   <animationName> <gridX> <gridY>      grid units, 64px cells
+#   Dec    <animationName> <x> <y>             pixels, measured up from the bottom
+#   Player <gridX> <gridY> <cw> <ch> <sx> <sy> <sm> <gravity> <bulletAnimation>
+#
+# Every (GX, GY) is a grid coordinate: the cell is 64x64 pixels and the entity's
+# bottom-left corner is aligned with the cell's bottom-left corner. The grid starts
+# at (0,0) in the bottom-left of the screen, so GY grows *upwards* and the loader
+# flips it into the engine's downward Y axis.
+#
+# The world is 16 cells tall and 32 cells wide. That height is NOT in this file -
+# the format has no field for it - and it is passed to the loader by the game,
+# which is the only place that can know how tall its world is. See LevelGrid.hpp.
+#
+# The player: starts at cell (3, 4), a 40x60 box, moves at 200 px/s, jumps at
+# 400 px/s, is capped at 250 px/s, falls at 900 px/s^2, and shoots the buster.
+Player 3 4 40 60 200 400 250 900 megaman_megaBuster_shot
+
+# --- ground: a run of solid tiles along the floor ---------------------------
+#
+# These are the tiles that do the colliding. A tile's bounding box is the size of
+# its animation, so mario_ground_tile gives a 64x64 box and the ground is exactly
+# one cell tall.
+Tile mario_ground_tile 0 0
+Tile mario_ground_tile 1 0
+Tile mario_ground_tile 2 0
+Tile mario_ground_tile 3 0
+Tile mario_ground_tile 4 0
+Tile mario_ground_tile 5 0
+Tile mario_ground_tile 6 0
+Tile mario_ground_tile 7 0
+Tile mario_ground_tile 8 0
+Tile mario_ground_tile 9 0
+Tile mario_ground_tile 10 0
+Tile mario_ground_tile 11 0
+Tile mario_ground_tile 12 0
+Tile mario_ground_tile 13 0
+Tile mario_ground_tile 14 0
+Tile mario_ground_tile 15 0
+Tile mario_ground_tile 16 0
+Tile mario_ground_tile 17 0
+Tile mario_ground_tile 18 0
+
+# A floating ledge, to show a tile that is not on the floor.
+Tile mario_ground_tile 7 4
+Tile mario_ground_tile 8 4
+Tile mario_ground_tile 9 4
+
+# A pipe. Its animation is 70x70 rather than 64x64, so this level also proves that
+# a tile's box and its anchor both come from the animation and neither is assumed
+# to be a whole cell. The box is 70x70 and the sprite's bottom-left corner sits on
+# the cell's bottom-left corner exactly as the course says.
+Tile mario_SmallPipe_tile 20 0
+Tile mario_SmallPipe_tile 21 0
+
+# --- decorations: drawn, never collided with -------------------------------
+#
+# Dec positions are PIXELS, not grid cells, and they are the entity's centre. So
+# the cloud below is at x=300, which is 4.69 cells across, and y=700, which is
+# 10.94 cells up - a hand-placed position that a grid-snapped format could not
+# express. A decoration has no bounding box and no body, so nothing can collide
+# with it, and that is expressed by the components it does not have rather than by
+# a flag anywhere.
+Dec mario_SmallCloud_dec 300 700
+Dec mario_BigBush_dec 760 96
+Dec mario_SmallBush_dec 980 100
+Dec mario_BigBush_dec 1500 110

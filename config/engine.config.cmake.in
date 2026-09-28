@@ -34,6 +34,13 @@ inline constexpr unsigned char kBackgroundColorBlue = @ENGINE_BACKGROUND_COLOR_B
 /// at runtime instead. Override with -DENGINE_ASSETS_CONFIG=<path>.
 inline constexpr char kAssetsConfig[] = "@ENGINE_ASSETS_CONFIG@";
 
+/// Absolute path to the level file the game loads at startup.
+///
+/// The same configure-time tradeoff as [kAssetsConfig], and for the same reason: a
+/// binary built here expects the repository at the same absolute path. Override with
+/// -DENGINE_LEVEL_FILE=<path>.
+inline constexpr char kLevelFile[] = "@ENGINE_LEVEL_FILE@";
+
 } // namespace engine::config
 
 #endif // ENGINE_ENGINE_CONFIG_HPP

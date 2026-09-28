@@ -54,6 +54,12 @@ set(ENGINE_BACKGROUND_COLOR_BLUE 48 CACHE STRING "Blue channel of the window bac
 set(ENGINE_ASSETS_CONFIG "${PROJECT_SOURCE_DIR}/assets/assets.txt"
     CACHE FILEPATH "Absolute path to the asset configuration file loaded at startup")
 
+# The level the game loads at startup, in the same spirit and with the same tradeoff
+# as the asset configuration above: an absolute path baked in at configure time, so
+# the game never depends on its working directory.
+set(ENGINE_LEVEL_FILE "${PROJECT_SOURCE_DIR}/assets/levels/level1.txt"
+    CACHE FILEPATH "Absolute path to the level file loaded at startup")
+
 option(ENGINE_BUILD_TESTS "Build the automated smoke tests" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------
@@ -167,6 +173,10 @@ add_library(engine STATIC
             src/engine/ecs/EntityView.cpp
             src/engine/ecs/SystemManager.cpp
             src/engine/graphics/SfmlRenderer.cpp
+            src/engine/level/Level.cpp
+            src/engine/level/LevelFile.cpp
+            src/engine/level/LevelGrid.cpp
+            src/engine/level/LevelLoader.cpp
             src/engine/input/ActionMap.cpp
             src/engine/input/ActionState.cpp
             src/engine/input/SfmlKeyMap.cpp

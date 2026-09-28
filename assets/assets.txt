@@ -94,6 +94,52 @@ Animation animations_explosion_burst   animations_explosion   12  8
 Animation mario_GoombaWalk_walk        mario_GoombaWalk      2  8
 Animation mario_GoombaDeath_flat       mario_GoombaDeath     2  6
 
+# --- level animations ------------------------------------------------
+#
+# A level file names an ANIMATION for every tile and every decoration, and names
+# one more for the player's bullets. Phase 13 added that format, and until these
+# existed a level could not be loaded at all: every record in it would have named
+# an animation that was not declared.
+#
+# All six are single-frame, which is a real thing rather than a placeholder: a
+# static tile, a cloud and a bullet are each one picture, and a one-frame
+# animation is the honest way to say "this artwork, never advancing". A frame count
+# of 1 divides every texture width exactly, so the divisibility rule that made
+# megaman_megaRun unloadable is not in tension with any of them.
+#
+# Each animation's name differs from the texture it uses, because asset names are
+# unique across the whole file rather than only within a kind - a texture and an
+# animation cannot be the same word, since an asset is referred to by its name
+# alone. The `_tile` and `_dec` suffixes are the same convention
+# mario_GoombaWalk_walk already established.
+#
+# Each one has a live consumer: the six lines in levels/level1.txt below that use
+# them, and nothing here is declared on the chance that a future level might want
+# it. The names are derived from the path, as every other name here is, with the
+# frame count appended where a file could plausibly hold more than one strip.
+#
+#   mario_ground_tile          64 x 64     exactly one grid cell
+#   mario_SmallPipe_tile       70 x 70     deliberately NOT a cell, to prove the
+#                                            collider and the anchor are both read
+#                                            from the animation rather than assumed
+#                                            to be 64
+#   mario_SmallCloud           70 x 51
+#   mario_SmallBush           150 x 68
+#   mario_BigBush             186 x 79
+#   megaman_megaBuster_shot    32 x 26     the player's bullets
+#
+# The course's own reference declares a 'Brick' animation, and there is no brick
+# artwork anywhere in this library - the reference itself points TexBrick at
+# mario/ground.png. So no Brick animation is declared here, and levels/level1.txt
+# contains no brick. Inventing one from the ground tile would be a lie about what
+# the game contains. See the note on question blocks in LevelLoader.hpp.
+Animation mario_ground_tile          mario_ground        1  1
+Animation mario_SmallPipe_tile       mario_SmallPipe     1  1
+Animation mario_SmallCloud_dec           mario_SmallCloud   1  1
+Animation mario_SmallBush_dec            mario_SmallBush    1  1
+Animation mario_BigBush_dec              mario_BigBush      1  1
+Animation megaman_megaBuster_shot    megaman_megaBuster  1  1
+
 # --- fonts -------------------------------------------------------
 Font fonts_numbers              library/fonts/numbers.ttf
 Font fonts_pixeled              library/fonts/pixeled.ttf

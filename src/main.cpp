@@ -4,7 +4,11 @@
 #include "engine/components/Collider.hpp"
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Transform.hpp"
+#include "engine/EngineConfig.hpp"
 #include "engine/graphics/Camera.hpp"
+#include "engine/level/LevelFile.hpp"
+#include "engine/level/LevelGrid.hpp"
+#include "engine/level/LevelLoader.hpp"
 #include "engine/input/Action.hpp"
 #include "engine/input/ActionState.hpp"
 #include "engine/systems/AnimationSystem.hpp"
@@ -36,6 +40,9 @@ using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::ecs::SystemManager;
 using engine::graphics::Camera;
+using engine::level::Level;
+using engine::level::LevelGrid;
+using engine::level::LevelLoader;
 using engine::input::Action;
 using engine::input::ActionState;
 using engine::physics::BodyType;
@@ -44,37 +51,8 @@ using engine::systems::CameraSystem;
 using engine::systems::MovementSystem;
 using engine::systems::PhysicsSystem;
 
-/// The player's top speed, in pixels per second.
-constexpr float kPlayerSpeed = 300.0F;
-
-/// The size of the world the demo builds, in pixels.
-///
-/// Deliberately much larger than the 1280x720 viewport, because a world that
-/// fits on screen cannot demonstrate a camera: there would be nothing to scroll.
-constexpr Vec2 kWorldSize{3200.0F, 1800.0F};
-
-/// The tag `CameraSystem` looks for. A tag rather than a `Player` class, because
-/// a player here is just an entity that happens to carry this tag.
-constexpr std::string_view kPlayerTag = "player";
-
 /// How much one press of the zoom keys changes the zoom, as a factor.
 constexpr float kZoomStep = 1.25F;
-
-/// A static wall: it is drawn, and it is collided with, and it never moves.
-///
-/// A wall needs a `Transform` (where it is), a `Rectangle` (how it looks), a
-/// `Collider` (how big it is to physics) and a `Body` (that it is static). Those
-/// four are all separate on purpose. The wall happens to use the same size for
-/// its collider and its rectangle, but nothing requires it to, and this takes
-/// them as one argument only because a plain wall has no reason to differ.
-void addStaticWall(EntityManager& world, const Vec2& center, const Vec2& size, const engine::Color& color)
-{
-    Entity& wall = world.addEntity("wall");
-    wall.addComponent<Transform>(Transform{center, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
-    wall.addComponent<Rectangle>(Rectangle{size, color});
-    wall.addComponent<Collider>(Collider{size});
-    wall.addComponent<Body>(Body{BodyType::Static});
-}
 
 /// Demo-only: lets `Z` and `X` change the camera's zoom so a human can see it.
 ///
@@ -118,133 +96,112 @@ public:
 private:
     Camera* m_camera = nullptr;
 };
-
-/// Builds the Phase 9 demonstration: a world larger than the screen, a player,
-/// a boundary, and scattered obstacles to show the world scrolling past.
+/// How tall the game's world is, in 64-pixel cells.
 ///
-/// This is a hardcoded setup on purpose. There is no scene system, no level
-/// format and no level editor yet, because none of them are needed to show that
-/// a camera works. `main` is where the game assembles its world; the engine
-/// itself stays unaware that a player, a wall or a camera exists.
-void buildCameraDemo(EntityManager& world, SystemManager& systems, Camera& camera, const engine::assets::AssetManager& assets)
-{
-    // Registration order is the update order, and every arrow below matters:
-    //
-    //   MovementSystem  input          -> velocity
-    //   PhysicsSystem   velocity       -> position, then collisions
-    //   CameraSystem    target position -> camera position
-    //   ZoomKeysSystem  zoom actions   -> camera zoom
-    //
-    // The camera must come after physics, or it would follow where the player
-    // was at the start of the frame rather than where it ended up. The zoom keys
-    // come last because they only read the keyboard.
-    systems.add<MovementSystem>(kPlayerSpeed);
-    systems.add<PhysicsSystem>();
-    systems.add<CameraSystem>(camera, kPlayerTag);
-    systems.add<ZoomKeysSystem>(camera);
+/// **The level format has no height field**, so this cannot come from the level
+/// file - `Tile`, `Dec` and `Player` all describe positions, and none of them
+/// describes the size of the world. A height is a property of the *game*, and this
+/// is the game stating it.
+///
+/// It has to be at least [Level::requiredCellsTall] for the level being loaded. If
+/// it is smaller, the flip is taken about the wrong axis and the entities that
+/// should be near the top of the level end up above the top of the world, which is
+/// visible but easy to misread as a conversion bug. Sixteen clears
+/// `assets/levels/level1.txt`, whose highest thing is a decoration at 700 pixels,
+/// i.e. 10.94 cells.
+constexpr float kLevelCellsTall = 16.0F;
 
-    //   AnimationSystem  game frame      -> which frame is showing
+/// Builds the world from the level file, and the systems that run in it.
+///
+/// ### This replaced a hardcoded demonstration
+///
+/// Until Phase 13 this function assembled a hand-written world of walls and
+/// pillars, and said why: *"There is no scene system, no level format and no level
+/// editor yet, because none of them are needed to show that a camera works."*
+/// Phase 13 added the level format, so that reason expired and the hand-written
+/// world went with it. Leaving it would have meant shipping two worlds, or
+/// shipping a level file that nothing reads - which is the same mistake Phase 11
+/// avoided when it declined to declare thirteen single-frame animations that
+/// nothing used.
+///
+/// The camera is still demonstrated: the level is 32 cells by 16, which is 2048 by
+/// 1024 pixels against a 1280 by 720 window, so the view genuinely has somewhere to
+/// scroll. Animation is still demonstrated too, by the Goomba tiles in the level
+/// file, which carry the multi-frame `mario_GoombaWalk_walk` animation.
+///
+/// ### Loading a level is the *game's* job, not the engine's
+///
+/// [engine::Application] is the composition root and stays ignorant of levels. It
+/// owns the asset manager, the world and the systems and wires them together, but
+/// it does not know what a level is, and adding that would make the engine a game.
+/// The engine provides the parser, the grid and the loader; *which* level to load
+/// and how tall a world to put it in are decisions, and they are made here.
+///
+/// ### Why there is no movement system
+///
+/// The engine's [MovementSystem] is a demonstration system, not the Assignment 3
+/// player: it sets a velocity on **every** entity that has a transform. The course
+/// is explicit that *"All movement logic should be in the movement system"* and
+/// that it must move the player and nothing else.
+///
+/// Registering it here would give every ground tile and every cloud a velocity.
+/// Tiles would be saved by [PhysicsSystem] forcing a static body's velocity to
+/// zero, but a decoration has no body at all - the course requires it to have no
+/// bounding box and no interactions - so it would be integrated and slide around the
+/// screen at whatever speed the player was moving.
+///
+/// So the player does not move yet, and that is not an omission. The level loads,
+/// the world exists, it draws, and it collides. Making the player move needs a
+/// movement system that knows which entity is the player, and writing one is the
+/// next phase's job, not this one's.
+void buildLevel(EntityManager& world, SystemManager& systems, Camera& camera,
+                const engine::assets::AssetManager& assets)
+{
+    // Registration order is the update order, and the reasoning is Phase 9's, which
+    // still holds for a world that came from a file:
     //
-    // Last, so a frame is chosen once per game frame from a position that has
-    // already settled. An animation's speed is counted in game frames, and
-    // `AnimationSystem::update()` is called exactly once per frame here, so the
-    // count is the loop's and not a wall-clock guess.
+    //   PhysicsSystem    velocity     -> position, then collisions
+    //   CameraSystem     target       -> camera position, after physics so it follows
+    //                                     where the player *ended* up
+    //   ZoomKeysSystem   zoom actions -> camera zoom
+    //   AnimationSystem  game frame   -> which frame is showing, last
     //
-    // It takes the manager by const reference rather than loading anything itself,
-    // and it is not the thing that draws: `RenderSystem` reads the frame this
-    // system chose. The two are separate because behaviour and drawing are
-    // separate concerns, and because the final frame of a finished animation has
-    // to be presented before the entity is removed.
+    // No MovementSystem, for the reason above.
+    systems.add<PhysicsSystem>();
+    systems.add<CameraSystem>(camera, std::string{engine::level::kPlayerTag});
+    systems.add<ZoomKeysSystem>(camera);
     systems.add<AnimationSystem>(assets);
 
-    // A slate grey for the boundary, a green for obstacles, and a dim blue for
-    // the scattered pillars, so the eye can tell structure from scenery.
-    const engine::Color wallColor{0.42F, 0.45F, 0.52F, 1.0F};
-    const engine::Color obstacleColor{0.36F, 0.58F, 0.42F, 1.0F};
-    const engine::Color pillarColor{0.24F, 0.32F, 0.46F, 1.0F};
+    // Read, then parse, then spawn: three steps that never appear in one place
+    // anywhere else, and the seam between them is what lets the parser be tested
+    // with a string literal and the loader with a hand-built `Level`.
+    //
+    // Both the open and the parse can throw, and both are allowed to: a level that
+    // does not load is a fatal error the game reports and exits on, not something
+    // to load half of and carry on. `main` catches it and says what it was.
+    const Level loadedLevel = engine::level::loadLevelFile(std::filesystem::path{engine::config::kLevelFile});
 
-    const float halfWidth = kWorldSize.x * 0.5F;
-    const float halfHeight = kWorldSize.y * 0.5F;
-    constexpr float kThickness = 40.0F;
+    // The height is the game's, not the level's - see [kLevelCellsTall].
+    const LevelGrid grid = LevelGrid::withCellsTall(kLevelCellsTall);
 
-    // The boundary of the world, well outside the viewport so the player cannot
-    // walk off the edge of what the camera can show.
-    addStaticWall(world, Vec2{halfWidth, kWorldSize.y - kThickness * 0.5F},
-                  Vec2{kWorldSize.x, kThickness}, wallColor);  // floor
-    addStaticWall(world, Vec2{halfWidth, kThickness * 0.5F}, Vec2{kWorldSize.x, kThickness}, wallColor);  // ceiling
-    addStaticWall(world, Vec2{kThickness * 0.5F, halfHeight}, Vec2{kThickness, kWorldSize.y}, wallColor);  // left
-    addStaticWall(world, Vec2{kWorldSize.x - kThickness * 0.5F, halfHeight}, Vec2{kThickness, kWorldSize.y},
-                  wallColor);  // right
+    const LevelLoader loader{assets};
+    const std::size_t spawned = loader.spawn(loadedLevel, world, grid);
 
-    // A few larger obstacles, placed so the player cannot simply walk in a
-    // straight line across the world.
-    addStaticWall(world, Vec2{900.0F, 400.0F}, Vec2{300.0F, 60.0F}, obstacleColor);
-    addStaticWall(world, Vec2{1900.0F, 1200.0F}, Vec2{200.0F, 400.0F}, obstacleColor);
-    addStaticWall(world, Vec2{2500.0F, 600.0F}, Vec2{120.0F, 120.0F}, obstacleColor);
-
-    // A grid of small pillars. These are scenery: their only job is to make the
-    // world visibly scroll past the camera, which is the whole point of the
-    // phase. A loop in main is not a level loader.
-    for (float x = 300.0F; x < kWorldSize.x - 200.0F; x += 500.0F)
+    // Reported rather than asserted. A level taller than the world it is loaded into
+    // still loads, and still draws - the entities that overflow simply sit above the
+    // top edge - so throwing here would refuse to run a level that is only *mostly*
+    // wrong. Printing it makes the mismatch visible at startup, which is where a
+    // level designer will actually see it, and leaves the decision to them.
+    if (loadedLevel.requiredCellsTall() > kLevelCellsTall)
     {
-        for (float y = 250.0F; y < kWorldSize.y - 200.0F; y += 500.0F)
-        {
-            addStaticWall(world, Vec2{x, y}, Vec2{60.0F, 60.0F}, pillarColor);
-        }
+        std::cerr << "Warning: this level needs " << loadedLevel.requiredCellsTall()
+                  << " cells of height but the game "
+                  << "world is only " << kLevelCellsTall << " cells tall; anything above that is off the top of "
+                  << "the world.\n";
     }
 
-    // The player. Dynamic, so physics moves it and collisions can push it back.
-    // Its collider and its drawn rectangle are the same size here for
-    // simplicity, but they are separate components and nothing depends on them
-    // agreeing.
-    // `addEntity` takes a `std::string` by value and `std::string` has no
-    // implicit conversion from `string_view` in C++17, so the tag is
-    // materialised here rather than passed straight through.
-    Entity& player = world.addEntity(std::string{kPlayerTag});
-    player.addComponent<Transform>(
-        Transform{Vec2{300.0F, 900.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
-    player.addComponent<Rectangle>(Rectangle{Vec2{50.0F, 50.0F}, engine::Color{0.95F, 0.78F, 0.25F, 1.0F}});
-    player.addComponent<Collider>(Collider{Vec2{50.0F, 50.0F}});
-    player.addComponent<Body>(Body{BodyType::Dynamic});
-
-    // A row of walking Goombas, to show animation end to end.
-    //
-    // These carry a `components::Animation` and no `components::Rectangle`, so
-    // they are drawn by `RenderSystem`'s animation query as one frame of a sprite
-    // sheet rather than as a filled shape. Three of them share one asset, and
-    // because the frame index lives on the component rather than on the asset they
-    // are deliberately on three different frames: the first starts part way
-    // through, the second part way through again, and the third at frame zero.
-    //
-    // The offsets are what make that visible. If the current frame were stored on
-    // the shared asset - the mistake the course's reference implementation makes -
-    // all three would show the same picture no matter what these say.
-    constexpr const char* kWalkAnimations[] = {"mario_GoombaWalk_walk", "mario_GoombaWalk_walk",
-                                               "mario_GoombaWalk_walk"};
-
-    for (std::uint32_t index = 0U; index < 3U; ++index)
-    {
-        Entity& goomba = world.addEntity("goomba");
-        goomba.addComponent<Transform>(
-            Transform{Vec2{1100.0F + static_cast<float>(index) * 140.0F, 700.0F}, Vec2{0.0F, 0.0F},
-                      Vec2{1.0F, 1.0F}, 0.0F});
-
-        Animation animation;
-        animation.assetName = kWalkAnimations[index];
-        animation.repeat = true;
-        // Frame 1 of a 2-frame animation, on a speed of 8, so each goomba is
-        // offset from the others but all of them keep walking.
-        animation.currentFrame = index == 1U ? 1U : 0U;
-        animation.ticksOnFrame = index * 4U;
-        goomba.addComponent<Animation>(animation);
-
-        // The goomba's box, so the pillars and it interact and the player can
-        // walk into it. Its size is the animation's *frame* size - 50x41 - which is
-        // the course's rule that a tile's collision box matches its animation, and
-        // not the 100x41 of the whole sheet.
-        goomba.addComponent<Collider>(Collider{Vec2{50.0F, 41.0F}});
-        goomba.addComponent<Body>(Body{BodyType::Static});
-    }
+    std::cerr << "Loaded " << loadedLevel.tiles().size() << " tiles, " << loadedLevel.decorations().size()
+              << " decorations and 1 player (" << spawned << " entities).\n";
 }
 
 /// Reads the optional `--frames <count>` argument.
@@ -295,8 +252,8 @@ int main(const int argc, char* const argv[])
         const std::optional<std::size_t> frameLimit = parseFrameLimit(argc, argv);
 
         engine::Application application;
-        buildCameraDemo(application.entityManager(), application.systemManager(), application.camera(),
-                        application.assets());
+        buildLevel(application.entityManager(), application.systemManager(), application.camera(),
+                   application.assets());
         return application.run(frameLimit);
     }
     catch (const std::exception& error)
