@@ -347,6 +347,34 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME render.text COMMAND text_test)
     set_tests_properties(render.text PROPERTIES TIMEOUT 300)
 
+
+    # Scene tests: the abstraction, the two scenes, the transition lifecycle, and
+    # the screen-space decision.
+    #
+    # The source paths are injected rather than searched for, so a moved file breaks
+    # the build instead of quietly making an architectural check vacuous.
+    add_executable(scene_test tests/SceneTest.cpp)
+    target_link_libraries(scene_test PRIVATE engine)
+    target_compile_options(scene_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(scene_test PRIVATE
+        ENGINE_SCENE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/scene/Scene.hpp"
+        ENGINE_SCENE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/scene/Scene.cpp"
+        ENGINE_MENU_SCENE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/scene/MenuScene.hpp"
+        ENGINE_MENU_SCENE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/scene/MenuScene.cpp"
+        ENGINE_PLAY_SCENE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/scene/PlayScene.hpp"
+        ENGINE_PLAY_SCENE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/scene/PlayScene.cpp"
+        ENGINE_SCREEN_SPACE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/components/ScreenSpace.hpp"
+        ENGINE_TRANSFORM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/components/Transform.hpp"
+        ENGINE_CAMERA_HEADER="${PROJECT_SOURCE_DIR}/include/engine/graphics/Camera.hpp"
+        ENGINE_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/AssetManager.hpp"
+        ENGINE_ACTION_STATE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/input/ActionState.hpp"
+        ENGINE_APPLICATION_HEADER="${PROJECT_SOURCE_DIR}/include/engine/Application.hpp"
+        ENGINE_TEXT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/components/Text.hpp"
+        ENGINE_RENDERER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/graphics/Renderer.hpp"
+        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp")
+    add_test(NAME scene.lifecycle COMMAND scene_test)
+    set_tests_properties(scene.lifecycle PROPERTIES TIMEOUT 300)
+
     # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
     #
     # No window and no real textures: the loader is driven through the AssetManager
