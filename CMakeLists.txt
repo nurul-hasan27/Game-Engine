@@ -60,6 +60,10 @@ set(ENGINE_ASSETS_CONFIG "${PROJECT_SOURCE_DIR}/assets/assets.txt"
 set(ENGINE_LEVEL_FILE "${PROJECT_SOURCE_DIR}/assets/levels/level1.txt"
     CACHE FILEPATH "Absolute path to the level file loaded at startup")
 
+# How tall the game's world is, in grid cells. A game setting rather than a level
+# one, because the level format has no field for it - see LevelGrid.
+set(ENGINE_LEVEL_CELLS_TALL 16 CACHE STRING "Height of the game world in 64-pixel grid cells")
+
 option(ENGINE_BUILD_TESTS "Build the automated smoke tests" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------
@@ -177,6 +181,9 @@ add_library(engine STATIC
             src/engine/level/LevelFile.cpp
             src/engine/level/LevelGrid.cpp
             src/engine/level/LevelLoader.cpp
+            src/engine/scene/MenuScene.cpp
+            src/engine/scene/PlayScene.cpp
+            src/engine/scene/Scene.cpp
             src/engine/input/ActionMap.cpp
             src/engine/input/ActionState.cpp
             src/engine/input/SfmlKeyMap.cpp
@@ -335,7 +342,8 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/RenderSystem.hpp"
         ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp"
         ENGINE_FONT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Font.hpp"
-        ENGINE_MAIN_SOURCE="${PROJECT_SOURCE_DIR}/src/main.cpp")
+        ENGINE_MAIN_SOURCE="${PROJECT_SOURCE_DIR}/src/main.cpp"
+        ENGINE_PLAY_SCENE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/scene/PlayScene.cpp")
     add_test(NAME render.text COMMAND text_test)
     set_tests_properties(render.text PROPERTIES TIMEOUT 300)
 

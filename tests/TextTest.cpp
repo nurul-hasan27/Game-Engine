@@ -1831,20 +1831,27 @@ void testTheFontImplementationPointerStaysPrivate()
 
 void testTheShippedGameAddsATextEntity()
 {
-    // The end-to-end demonstration, pinned at the only place it can be observed.
+    // The end-to-end demonstration, pinned where the shipped game builds it.
     //
-    // The game builds its world in a function in `main`, which is not exposed as a
-    // callable unit, so there is nothing for a test to invoke and assert on. The
-    // game binary is already covered as a smoke test - there is a ctest that runs
-    // `game --frames 5` - and that test is what catches a *broken* label, because a
-    // missing font makes the game fail at run time. What it cannot catch is a label
-    // that is quietly absent, because an absent label costs the game nothing.
+    // ### Why this file and not `main.cpp` any more
     //
-    // So this is a source check, and it is honest about being one. The proper fix is
-    // for a later phase to give the world a name a test can call, which is scene
-    // work; until then this says the demonstration exists rather than pretending a
-    // runtime test could.
-    const std::string code = codeOf(ENGINE_MAIN_SOURCE);
+    // This was a source check of `main.cpp` for a reason recorded when it was
+    // written: the game built its world in a function that nothing could call, so
+    // "does the shipped game add a text entity" had no run-time answer and the file
+    // scan was the only one available. It even said so - *"The proper fix is for a
+    // later phase to give the world a name a test can call, which is scene work."*
+    //
+    // Phase 15 is that phase. [engine::scene::PlayScene] is a callable unit: a test
+    // constructs one and inspects the world it built, so the demonstration is now
+    // observable at run time and `SceneTest` checks it there. What remains here is
+    // the part a run-time check still cannot say, which is that the label is
+    // *reached* - that the call is a statement in the constructor rather than a
+    // definition nobody invokes. The count and the statement checks below are kept
+    // for exactly that, and the run-time check does not replace them.
+    //
+    // Nothing was weakened: every assertion below still runs, and the same file
+    // still has to satisfy it. Only the path changed, because the code moved.
+    const std::string code = codeOf(ENGINE_PLAY_SCENE_SOURCE);
 
     CHECK(!code.empty());
     if (code.empty())
@@ -1854,7 +1861,7 @@ void testTheShippedGameAddsATextEntity()
 
     // It adds a label entity, from a helper, carrying a Text component.
     CHECK(has(code, "addTextLabel("));
-    CHECK(has(code, "addComponent<Text>"));
+    CHECK(has(code, "addComponent<components::Text>"));
     CHECK(has(code, "#include \"engine/components/Text.hpp\""));
 
     // And the label names a committed font rather than an invented one. The three
@@ -1891,7 +1898,7 @@ void testTheShippedGameAddsATextEntity()
 
     if (!foundCallStatement)
     {
-        std::cerr << "    main adds a text label, but not as a statement it reaches\n";
+        std::cerr << "    the play scene adds a text label, but not as a statement it reaches\n";
     }
 
     CHECK(foundCallStatement);

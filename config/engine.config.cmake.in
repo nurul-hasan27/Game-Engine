@@ -41,6 +41,21 @@ inline constexpr char kAssetsConfig[] = "@ENGINE_ASSETS_CONFIG@";
 /// -DENGINE_LEVEL_FILE=<path>.
 inline constexpr char kLevelFile[] = "@ENGINE_LEVEL_FILE@";
 
+/// How tall the game's world is, in 64-pixel grid cells.
+///
+/// The level format carries no height field - a [engine::level::LevelGrid] takes it
+/// as an argument precisely because the level file is not entitled to say how tall
+/// the world it drops into is - so the world height is a decision this game makes,
+/// and it belongs next to the level path rather than inside the level loader.
+/// Override with -DENGINE_LEVEL_CELLS_TALL=<n>.
+///
+/// An integer rather than a float, because a count of cells is whole: there is no
+/// such thing as half a grid cell, and a half-cell would be a request the loader
+/// could only round, which is the rounding this engine refused when it decided that
+/// a frame count must divide a texture width exactly. The scene converts once, at
+/// the call to `withCellsTall`, which is the only place the two types meet.
+inline constexpr unsigned int kLevelCellsTall = @ENGINE_LEVEL_CELLS_TALL@u;
+
 } // namespace engine::config
 
 #endif // ENGINE_ENGINE_CONFIG_HPP
