@@ -656,6 +656,27 @@ private:
     return count;
 }
 
+/// The active scene's id, but safe when there is no scene at all.
+///
+/// ### Why not `sceneId().value()`
+///
+/// The first version of these groups read the id with `optional::value()`, which
+/// throws on an empty optional and is undefined behaviour in a release build. That
+/// is not a hypothetical: the `transition-disabled` mutation removes the only thing
+/// that creates a scene, so every one of these groups hit an empty optional - and
+/// the test binary **segfaulted**. The suite then reported that mutation as
+/// UNDETECTED, because a crash is not an assertion and the harness had been
+/// matching only `\(Failed\)`.
+///
+/// A test that dies before it can assert is worse than a test that fails, because
+/// it takes the other groups down with it and looks like a pass. So this returns
+/// `false` for "no scene", which fails the check cleanly and says what it meant.
+[[nodiscard]] bool activeSceneIs(const engine::Application& application, const SceneId expected)
+{
+    const std::optional<SceneId> id = application.sceneId();
+    return id.has_value() && *id == expected;
+}
+
 // ---------------------------------------------------------------------------
 // A. The shape of the abstraction
 // ---------------------------------------------------------------------------
@@ -903,10 +924,28 @@ void testTheMenuMovesOnThePressEdgeOnly()
     // Five frames of a held key, and the selection has not moved at all.
     CHECK(menu.selectedIndex() == 0U);
 
+    // And the same in the *other* direction.
+    //
+    // This was missing, and a mutation proved it. Reading `isActive` instead of
+    // `wasPressed` for `MoveUp` - while the held key here is `S`, which drives
+    // `MoveDown` - changed nothing observable and passed all nineteen suites. The
+    // press-edge property was being tested for one of the two navigation actions
+    // and assumed for the other, and a menu that wrapped on every held `W` while
+    // behaving on `S` would have shipped.
+    ActionDriver upward;
+    static_cast<void>(upward.pressedNow(Key::Up));
+    for (int frame = 0; frame < 5; ++frame)
+    {
+        menu.update(upward.held(), 0.016F);
+    }
+    CHECK(menu.selectedIndex() == 0U);
+
     // The edge is what moves it, and the edge comes from the action layer's own
     // `wasPressed`, so this is the menu reading an action rather than a key.
     menu.update(ActionDriver{}.pressedNow(Key::S), 0.016F);
     CHECK(menu.selectedIndex() == 1U);
+    menu.update(ActionDriver{}.pressedNow(Key::Up), 0.016F);
+    CHECK(menu.selectedIndex() == 0U);
 }
 
 void testTheMenuStartsTheGame()
@@ -1165,7 +1204,7 @@ void testChangeSceneIsDeferredUntilTheNextFrame()
     // a menu on frame one.
     application->update();
     CHECK(application->sceneId().has_value());
-    CHECK(application->sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(*application, SceneId::Menu));
     CHECK(ledger->constructed == 1);
 }
 
@@ -1177,7 +1216,7 @@ void testTheTransitionHappensAtAFrameBoundary()
 
     application->changeScene(SceneId::Menu);
     application->update();
-    CHECK(application->sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(*application, SceneId::Menu));
 
     // The menu asks for the play scene, from inside its own update.
     ledger->requestFrom = "menu";
@@ -1188,7 +1227,7 @@ void testTheTransitionHappensAtAFrameBoundary()
     // It asked, and nothing has happened yet. The frame that asked is still the
     // menu's frame - this is the whole deferral, and the reason a frame is never
     // updated by one scene and drawn by another.
-    CHECK(application->sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(*application, SceneId::Menu));
     CHECK(ledger->destroyed == 0);
 
     // And this frame's render is still the menu's, for the same reason.
@@ -1201,7 +1240,7 @@ void testTheTransitionHappensAtAFrameBoundary()
 
     // The next frame is the new scene's, from its very first update.
     application->update();
-    CHECK(application->sceneId().value() == SceneId::Play);
+    CHECK(activeSceneIs(*application, SceneId::Play));
     CHECK(ledger->destroyed == 1);
     CHECK(ledger->updateOrder.size() == 3U);
     if (ledger->updateOrder.size() == 3U)
@@ -1283,7 +1322,7 @@ void testNoSceneIsDestroyedWhileItIsRunning()
     // And the switch really did happen, so the checks above are not passing because
     // nothing was ever destroyed.
     CHECK(ledger->destroyed == 1);
-    CHECK(application->sceneId().value() == SceneId::Play);
+    CHECK(activeSceneIs(*application, SceneId::Play));
 }
 
 void testOnlyTheActiveSceneUpdates()
@@ -1359,7 +1398,7 @@ void testTheMenuTransitionsToPlayAndBack()
 
     application.changeScene(SceneId::Menu);
     application.update();
-    CHECK(application.sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(application, SceneId::Menu));
 
     // The menu is a real menu now, with a real world and real text.
     const auto* menu = dynamic_cast<const MenuScene*>(application.currentScene());
@@ -1372,7 +1411,7 @@ void testTheMenuTransitionsToPlayAndBack()
     // Confirm, the way a player does: through the action the action layer built.
     application.changeScene(SceneId::Play);
     application.update();
-    CHECK(application.sceneId().value() == SceneId::Play);
+    CHECK(activeSceneIs(application, SceneId::Play));
 
     // The play scene's world is its own. The menu's four entities are gone, not
     // sharing a world with the level.
@@ -1389,7 +1428,7 @@ void testTheMenuTransitionsToPlayAndBack()
     // And back again.
     application.changeScene(SceneId::Menu);
     application.update();
-    CHECK(application.sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(application, SceneId::Menu));
     const auto* menuAgain = dynamic_cast<const MenuScene*>(application.currentScene());
     CHECK(menuAgain != nullptr);
     if (menuAgain != nullptr)
@@ -1409,7 +1448,7 @@ void testAQuitRequestStopsTheApplication()
 
     application->changeScene(SceneId::Menu);
     application->update();
-    CHECK(application->sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(*application, SceneId::Menu));
 
     ledger->requestFrom = "menu";
     ledger->request = SceneTransition::quitApplication();
@@ -1444,7 +1483,7 @@ void testSceneIdIsAskedOfTheScene()
     application.update();
 
     CHECK(application.sceneId().has_value());
-    CHECK(application.sceneId().value() == SceneId::Play);
+    CHECK(activeSceneIs(application, SceneId::Play));
     CHECK(std::string{application.currentScene()->name()} == "liar");
 }
 
@@ -1474,7 +1513,7 @@ void testApplicationWithoutASceneStillWorks()
     // scene system without giving up the old door.
     application.changeScene(SceneId::Menu);
     application.update();
-    CHECK(application.sceneId().value() == SceneId::Menu);
+    CHECK(activeSceneIs(application, SceneId::Menu));
     CHECK(application.currentScene() != nullptr);
 }
 
