@@ -18,11 +18,23 @@ namespace
 /// The most tokens any record has on one line, counting the keyword.
 ///
 /// `Player <gx> <gy> <cw> <ch> <sx> <sy> <sm> <gy> <b>` is ten. `Tile` and `Dec`
-/// are four. The array is sized for the widest so one tokenizer serves all three,
-/// and so that a player line with eleven fields is still *counted* accurately
-/// rather than truncated and reported as if it had exactly ten - telling someone
-/// their line has ten fields when it has eleven sends them editing the wrong one.
+/// are four.
 constexpr std::size_t kMaxTokenCount = 10;
+
+/// How many tokens are actually kept.
+///
+/// One **more** than the widest record, and the extra slot is load-bearing: the
+/// too-many-fields error names the first unexpected field, which is
+/// `tokens[tokenCountOf(kind)]` - and for the widest record that is index 10, one
+/// past a ten-element array.
+///
+/// This was a real out-of-bounds read, found by a test asserting that an
+/// eleven-field player line reports which field was unexpected. It did not crash,
+/// because the array was default-initialised and the read landed in adjacent
+/// storage that happened to be empty; the message simply lost the field name. A
+/// silent wrong answer from a bounds violation is worse than a crash, so the array
+/// is now sized to make the read well defined.
+constexpr std::size_t kTokenCapacity = kMaxTokenCount + 1U;
 
 /// The exact token count a record of `kind` must have, keyword included.
 ///
@@ -55,12 +67,12 @@ constexpr std::size_t kMaxTokenCount = 10;
 }
 
 /// Splits `line` into whitespace-separated tokens and returns how many there are,
-/// writing the first [kMaxTokenCount] of them into `tokens`.
+/// writing the first [kTokenCapacity] of them into `tokens`.
 ///
 /// The count is the **true** token count, not the number stored, for the reason
 /// given on [kMaxTokenCount]: that count goes straight into the error message.
 [[nodiscard]] std::size_t tokenize(const std::string_view line,
-                                  std::array<std::string_view, kMaxTokenCount>& tokens) noexcept
+                                  std::array<std::string_view, kTokenCapacity>& tokens) noexcept
 {
     std::size_t count = 0;
     std::size_t stored = 0;
@@ -265,7 +277,7 @@ void reportWrongArity(const LevelRecordKind kind, const std::size_t tokenCount, 
 }
 
 /// Parses one record. Appends to `level` unless it is a player, which is returned.
-void parseRecord(const LevelRecordKind kind, const std::array<std::string_view, kMaxTokenCount>& tokens,
+void parseRecord(const LevelRecordKind kind, const std::array<std::string_view, kTokenCapacity>& tokens,
                  const std::size_t lineNumber, Level& level, bool& sawPlayer, PlayerRecord& player)
 {
     if (kind == LevelRecordKind::Tile)
@@ -296,9 +308,16 @@ void parseRecord(const LevelRecordKind kind, const std::array<std::string_view, 
 
     if (sawPlayer)
     {
-        // Checked before the fields are read, so a second player line that is also
-        // malformed still reports the duplication - the level having two players is
-        // the more fundamental problem, and the more confusing one to find.
+        // A second Player line is refused, so a level can never carry two players.
+        //
+        // Note the *ordering*, which is the caller's decision and is deliberate: the
+        // arity check runs before a record is dispatched here, so a second Player
+        // line that is also short reports the missing field rather than the
+        // duplication. That is the right way round - a line too short to be a Player
+        // record is not yet a second Player, and naming its missing field is the more
+        // actionable message. This comment previously claimed the opposite, and a
+        // test asserting the duplication was written to match the claim rather than
+        // the code. That is what found it.
         fail(lineNumber, "a second Player line; the level file must contain exactly one, which specifies the "
                          "player for this level");
     }
@@ -345,7 +364,7 @@ Level parseLevelFile(const std::string_view contents)
     PlayerRecord player;
     bool sawPlayer = false;
 
-    std::array<std::string_view, kMaxTokenCount> tokens{};
+    std::array<std::string_view, kTokenCapacity> tokens{};
     std::size_t lineNumber = 0;
     std::size_t cursor = 0;
 
@@ -386,10 +405,15 @@ Level parseLevelFile(const std::string_view contents)
 
         if (tokenCount > tokenCountOf(kind))
         {
+            // `tokens[tokenCountOf(kind)]` is the first field past the record's own
+            // shape, and `kTokenCapacity` guarantees that slot exists for the widest
+            // record. For a shorter record it is comfortably in range too.
+            const std::string_view firstUnexpected = tokens[tokenCountOf(kind)];
+
             fail(lineNumber, std::string{kind == LevelRecordKind::Player ? "Player" : "record"} +
                                  " entry has " + std::to_string(tokenCount) +
                                  " fields but must have exactly " + std::to_string(tokenCountOf(kind)) +
-                                 "; the first unexpected field is '" + std::string{tokens[tokenCountOf(kind)]} +
+                                 "; the first unexpected field is '" + std::string{firstUnexpected} +
                                  "'; " + std::string{syntaxOf(kind)});
         }
 

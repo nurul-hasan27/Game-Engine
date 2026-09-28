@@ -1650,7 +1650,10 @@ void testTheShippedConfigurationParses()
     // reject is worthless, so this is the only version of the check that matters.
     const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
 
-    CHECK(entries.size() == 30U);
+    // 24 textures + 3 fonts + 9 animations. The textures and fonts are the whole
+    // committed library and have not moved; Phase 13 added the six animations,
+    // taking animations from 3 to 9.
+    CHECK(entries.size() == 36U);
 }
 
 void testTheShippedConfigurationHasTheExpectedEntryCounts()
@@ -1676,15 +1679,55 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
         }
     }
 
-    // 24 images, 3 fonts and 3 animations. The images and fonts are the whole
-    // committed library; the animations are the three multi-frame strips in it.
-    // The group below derives the texture and font numbers from the library
-    // itself, so this one is the statement of intent rather than a second guess
-    // at the same fact.
+    // 24 images, 3 fonts and 9 animations.
+    //
+    // The images and fonts are the whole committed library, unchanged. The
+    // animations are of two kinds and the distinction matters more than the total:
+    //
+    //   3 multi-frame   the strips in the library. Each one's frame count was
+    //                    measured against the real artwork before being written
+    //                    down, and each divides its texture's width exactly.
+    //   6 single-frame  added by Phase 13, one per animation named by
+    //                    `assets/levels/level1.txt`. A static tile, a cloud and a
+    //                    bullet are each one picture, so a one-frame animation is
+    //                    the honest description. A frame count of 1 divides every
+    //                    width exactly, so the rule that made megaman_megaRun
+    //                    unloadable does not apply to any of them.
+    //
+    // The group below derives the texture and font numbers from the library itself,
+    // so this one is the statement of intent rather than a second guess at the same
+    // fact. The texture and font numbers did not move in Phase 13 - no new artwork
+    // was added, only new animations over artwork already declared.
     CHECK(textures == 24U);
     CHECK(fonts == 3U);
-    CHECK(animations == 3U);
-    CHECK(textures + fonts + animations == 30U);
+    CHECK(animations == 9U);
+    CHECK(textures + fonts + animations == 36U);
+
+    // A stronger claim than the flat total: exactly three animations advance, and
+    // exactly six are a single still frame. If a later phase adds a multi-frame
+    // strip, this is the assertion that notices - and it is the one that matters,
+    // because a multi-frame entry is a claim about dividing a real texture's width.
+    std::size_t multiFrame = 0;
+    std::size_t singleFrame = 0;
+    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    {
+        if (entry.type != engine::assets::AssetType::Animation)
+        {
+            continue;
+        }
+
+        if (entry.frameCount == 1U)
+        {
+            ++singleFrame;
+        }
+        else
+        {
+            ++multiFrame;
+        }
+    }
+
+    CHECK(multiFrame == 3U);
+    CHECK(singleFrame == 6U);
 }
 
 void testEveryConfiguredPathExists()
@@ -1774,12 +1817,13 @@ void testEveryConfiguredAssetLoadsThroughTheManager()
     // The end-to-end statement: the shipped configuration, loaded by the real
     // loader, resolves every name to a real resource. Constructing the manager
     // already throws if any file will not load, so reaching the checks below means
-    // all 30 entries were accepted.
+    // all 36 entries were accepted. 30 before Phase 13, which added six animations
+    // and no textures or fonts.
     const SfmlAssetManager manager{shippedConfiguration()};
 
     CHECK(manager.textureCount() == 24U);
     CHECK(manager.fontCount() == 3U);
-    CHECK(manager.animationCount() == 3U);
+    CHECK(manager.animationCount() == 9U);
 
     for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
     {

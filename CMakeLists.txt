@@ -315,6 +315,21 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME input.action_abstraction COMMAND action_test)
     set_tests_properties(input.action_abstraction PROPERTIES TIMEOUT 120)
 
+    # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
+    #
+    # No window and no real textures: the loader is driven through the AssetManager
+    # interface with a double that declares the committed artwork's real frame sizes,
+    # so a wrong size cannot pass for a right one. The one thing that does read the
+    # filesystem is the committed level file itself, which is the point - the shipped
+    # configuration is covered by the same assertions as everything else.
+    add_executable(level_test tests/LevelTest.cpp)
+    target_link_libraries(level_test PRIVATE engine)
+    target_compile_options(level_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(level_test PRIVATE
+        ENGINE_COMMITTED_LEVEL_FILE="${ENGINE_LEVEL_FILE}")
+    add_test(NAME level.format_and_spawn COMMAND level_test)
+    set_tests_properties(level.format_and_spawn PROPERTIES TIMEOUT 120)
+
     # Input: the key state machine, the SFML key adapter, and MovementSystem.
     add_executable(input_test tests/InputTest.cpp)
     target_link_libraries(input_test PRIVATE engine)

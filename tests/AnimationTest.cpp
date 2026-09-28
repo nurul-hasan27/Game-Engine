@@ -1356,11 +1356,14 @@ void testRenderSystemDoesNotWriteTheAnimationComponent()
 
 void testTheShippedAnimationsPlay()
 {
-    // The three entries `assets/assets.txt` declares, through the real loader and
-    // the real artwork.
+    // The entries `assets/assets.txt` declares, through the real loader and the real
+    // artwork. Nine of them: the three multi-frame strips below, and the six
+    // single-frame animations Phase 13 added for `assets/levels/level1.txt`. The
+    // per-animation checks that follow are all about the multi-frame ones, because a
+    // one-frame animation has a frame size and nothing else to assert.
     SfmlAssetManager assets = shippedManager();
 
-    CHECK(assets.animationCount() == 3U);
+    CHECK(assets.animationCount() == 9U);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameCount() == 2U);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameWidth() == 50);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameHeight() == 41);
