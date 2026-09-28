@@ -321,6 +321,18 @@ public:
     /// frame is driven through [update] and [render] rather than through this.
     [[nodiscard]] const scene::Scene* currentScene() const noexcept;
 
+    /// Whether the main loop should keep going.
+    ///
+    /// Cleared by a window close, by [run]'s frame cap being reached, and by a
+    /// scene's [scene::SceneTransition::quitApplication] at the next frame boundary.
+    ///
+    /// Public because "did the quit request take effect" has no other observable
+    /// answer. The alternative test is to call [run] with no frame cap and see
+    /// whether it returns, which means a failing assertion becomes a **hang** - a
+    /// timeout rather than a failure, and a suite that takes the whole run down
+    /// with it. Asking is one call and it says exactly what happened.
+    [[nodiscard]] bool isRunning() const noexcept { return m_isRunning; }
+
     /// Replaces the factory used to build scenes. For tests.
     ///
     /// The default is [engine::scene::makeScene]. Replacing it does not rebuild the

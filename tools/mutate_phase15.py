@@ -132,9 +132,17 @@ mutation(
     "The owner remembers the requested id instead of asking the scene which one it is.",
     "scene_test: 'sceneId is asked of the scene' - a factory that ignores its argument "
     "must not be able to make sceneId() lie",
-    [patch(f"{SRC}/Application.cpp",
+    [patch(f"{INC}/Application.hpp",
+           "    std::optional<scene::SceneTransition> m_pendingTransition;",
+           "    std::optional<scene::SceneTransition> m_pendingTransition;\n"
+           "    std::optional<scene::SceneId> m_rememberedId; // MUTATION"),
+     patch(f"{SRC}/Application.cpp",
+           "    m_pendingTransition = scene::SceneTransition::to(id);",
+           "    m_pendingTransition = scene::SceneTransition::to(id);\n"
+           "    m_rememberedId = id; // MUTATION: remembered rather than asked"),
+     patch(f"{SRC}/Application.cpp",
            "    return m_scene->id();",
-           "    return m_pendingSceneIdForTest; // MUTATION: remembered, not asked")],
+           "    return m_rememberedId; // MUTATION")],
 )
 
 mutation(
@@ -147,10 +155,23 @@ mutation(
 )
 
 mutation(
-    "quit-honoured-in-scene",
-    "The scene stops the application directly, from inside its own update.",
-    "scene_test: 'a quit request stops the application' - and it should be a build "
-    "rejection or a detection, because a scene cannot reach the owner",
+    "quit-degraded-into-a-scene-switch",
+    "quitApplication() returns a scene switch instead of a quit, so 'QUIT' on the menu "
+    "navigates into the level.",
+    "scene_test: 'the menu quits' - a quit is a third answer, not a scene",
+    [patch(f"{INC}/scene/Scene.hpp",
+           "        return SceneTransition{std::nullopt, true};",
+           "        return SceneTransition{std::optional<SceneId>{SceneId::Menu}, false}; // MUTATION")],
+)
+
+mutation(
+    "scene-holds-a-back-pointer-to-the-owner",
+    "A scene gains a void* owner pointer, so the type that is supposed to be unable to "
+    "reach the engine can.",
+    "BUILD_REJECTED is not expected and TEST_DETECTED is not expected either - this is "
+    "the shape of change a *review* catches and a test cannot, which is why the "
+    "no-global group is a source check rather than a behavioural one. Recorded as "
+    "UNDETECTED deliberately, so the limitation is visible rather than assumed away.",
     [patch(f"{INC}/scene/Scene.hpp",
            "    const SceneContext* m_context;",
            "    const SceneContext* m_context;\n    void* m_owner = nullptr; // MUTATION")],
@@ -314,7 +335,10 @@ mutation(
            "                                             const Camera& camera) noexcept\n"
            "{\n"
            "    return RenderTransform{transform.position, transform.scale * camera.zoom(),\n"
-           "                           transform.angle * kDegreesPerRadian}; // MUTATION\n}")],
+           "                           transform.angle * kDegreesPerRadian}; // MUTATION\n}"),
+     patch(f"{SRC}/systems/RenderSystem.cpp",
+           "graphics::toScreenTransform(transform)",
+           "graphics::toScreenTransform(transform, *m_camera)")],
 )
 
 mutation(
@@ -350,6 +374,10 @@ mutation(
     "decoration a velocity.",
     "scene_test: 'the play scene registers its own systems'",
     [patch(f"{SRC}/scene/PlayScene.cpp",
+           "#include \"engine/systems/PhysicsSystem.hpp\"",
+           "#include \"engine/systems/MovementSystem.hpp\"\n"
+           "#include \"engine/systems/PhysicsSystem.hpp\""),
+     patch(f"{SRC}/scene/PlayScene.cpp",
            "    m_systems.add<engine::systems::PhysicsSystem>();",
            "    m_systems.add<engine::systems::PhysicsSystem>();\n"
            "    m_systems.add<engine::systems::MovementSystem>(100.0F); // MUTATION")],
@@ -377,8 +405,8 @@ mutation(
     "The play scene does not flush its own world's deferred destructions.",
     "scene_test: 'the play scene flushes its own deferred destruction'",
     [patch(f"{SRC}/scene/PlayScene.cpp",
-           "    m_world.update();\n}",
-           "    // MUTATION: no flush")],
+           "    m_world.update();",
+           "    // MUTATION: the scene never flushes its own world")],
 )
 
 mutation(
@@ -398,15 +426,21 @@ mutation(
 
 mutation(
     "scene-owns-its-own-asset-manager",
-    "A scene builds its own asset manager instead of borrowing the shared one.",
-    "BUILD_REJECTED expected - the field would have to be a pointer the scene deletes, "
-    "and SceneContext hands out a const reference. scene_test: 'assets are shared not "
-    "duplicated' if it did compile",
-    [patch(f"{INC}/scene/SceneContext.hpp"
-           if os.path.exists(f"{INC}/scene/SceneContext.hpp") else f"{INC}/scene/Scene.hpp",
-           "    [[nodiscard]] const assets::AssetManager& assets() const noexcept { return *m_assets; }",
-           "    [[nodiscard]] const assets::AssetManager& assets() const noexcept { return *m_assets; }\n"
-           "    assets::SfmlAssetManager* m_duplicate = nullptr; // MUTATION")],
+    "The play scene builds its own asset manager and uses that, instead of the shared "
+    "one it is given.",
+    "scene_test: 'assets are shared not duplicated' - the assertion is pointer "
+    "identity against the application's own manager, not merely that both can load",
+    [patch(f"{SRC}/scene/PlayScene.cpp",
+           "#include \"engine/level/LevelLoader.hpp\"",
+           "#include \"engine/level/LevelLoader.hpp\"\n"
+           "#include \"engine/assets/SfmlAssetManager.hpp\"\n"
+           "namespace { engine::assets::SfmlAssetManager* g_own = nullptr; } // MUTATION"),
+     patch(f"{SRC}/scene/PlayScene.cpp",
+           "    const level::LevelLoader loader{context.assets()};",
+           "    if (g_own == nullptr)\n    {\n"
+           "        g_own = new assets::SfmlAssetManager{std::filesystem::path{config::kAssetsConfig}};\n"
+           "    }\n"
+           "    const level::LevelLoader loader{*g_own}; // MUTATION")],
 )
 
 mutation(
@@ -424,8 +458,9 @@ mutation(
     "The scene base header names an SFML type.",
     "scene_test: 'the scene headers are sfml free' - a source check",
     [patch(f"{INC}/scene/Scene.hpp",
-           "namespace engine::scene\n{\n",
-           "namespace engine::scene\n{\n// MUTATION: sf::RenderWindow* m_window = nullptr;\n")],
+           "#include \"engine/input/ActionState.hpp\"",
+           "#include \"engine/input/ActionState.hpp\"\n"
+           "#include <SFML/Graphics/RenderWindow.hpp> // MUTATION")],
 )
 
 mutation(
@@ -435,7 +470,8 @@ mutation(
     "scene_test: 'the engine layers below do not know about scenes'",
     [patch(f"{INC}/graphics/Renderer.hpp",
            "namespace engine::graphics\n{\n",
-           "namespace engine::graphics\n{\n// MUTATION: scene::SceneId m_pending;\n")],
+           "namespace engine::scene { enum class SceneId; } // MUTATION\n"
+           "namespace engine::graphics\n{\n")],
 )
 
 # ---------------------------------------------------------------------------

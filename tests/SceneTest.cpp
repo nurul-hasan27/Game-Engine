@@ -22,11 +22,13 @@
 #include "engine/Color.hpp"
 #include "engine/EngineConfig.hpp"
 #include "engine/Application.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/assets/SfmlAssetManager.hpp"
 #include "engine/components/ScreenSpace.hpp"
 #include "engine/components/Text.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/ecs/EntityManager.hpp"
+#include "engine/ecs/System.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/graphics/SfmlRenderer.hpp"
@@ -57,6 +59,7 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1453,16 +1456,41 @@ void testAQuitRequestStopsTheApplication()
     ledger->requestFrom = "menu";
     ledger->request = SceneTransition::quitApplication();
 
+    // The frame that asks has finished its own update, and nothing has happened yet:
+    // a quit is a request like any other and is honoured at the next boundary. The
+    // first version of this group asserted `isRunning()` here, one frame too early,
+    // and failed against code that was correct.
     application->update();
-
-    // The frame that asked has finished updating, so the quit is honoured at the
-    // boundary and there is no wasted frame after it.
+    CHECK(application->isRunning());
     CHECK(ledger->destroyed == 0);
     CHECK(application->currentScene() != nullptr);
 
-    // And the loop stops. `run` returns, which is what the game binary's exit code
-    // comes from.
+    // The next frame's boundary, and the quit is applied. The scene is *not* destroyed
+    // by a quit: it did nothing wrong, and the process is ending anyway.
+    application->update();
+    CHECK_FALSE(application->isRunning());
+    CHECK(ledger->destroyed == 0);
+
+    // And the loop stays stopped.
+    //
+    // This is asked rather than inferred from `run` returning. The first version
+    // called `run(2)` and asserted EXIT_SUCCESS, which is what `run` returns when it
+    // stops *for any reason* - including the frame cap it was handed. Removing the
+    // one line that clears the running flag left the test green, because two frames
+    // is two frames and then it exits happily. Inferring "the quit worked" from a
+    // loop that was told to stop after two frames is not an assertion about
+    // quitting; it is an assertion about the cap.
+    CHECK_FALSE(application->isRunning());
     CHECK(application->run(2U) == EXIT_SUCCESS);
+    CHECK_FALSE(application->isRunning());
+
+    // A quit with no scene behind it is honoured too, so the flag is cleared by the
+    // boundary rather than by the scene path alone.
+    engine::Application noScene;
+    CHECK(noScene.isRunning());
+    noScene.changeScene(SceneId::Menu);
+    noScene.update();
+    CHECK(noScene.isRunning());
 }
 
 void testSceneIdIsAskedOfTheScene()
@@ -1557,6 +1585,169 @@ void testTheWorldOfAnOldSceneIsGone()
     }
     CHECK(countTextEntities(play->world()) == 1U);
     CHECK(play->world().aliveEntityCount() != menuEntityCount);
+}
+
+// ---------------------------------------------------------------------------
+// D2. The two worlds, kept apart
+//
+// Each of these exists because a mutation that changed the behaviour passed every
+// test. "The application's own systems do not run while a scene is active" and "the
+// application's own world is not drawn while a scene is active" are both true of the
+// code, and neither was observable from a test that registered no systems and put no
+// entities in the application's world - a mutation that ran the wrong world simply
+// ran an empty one, and an empty world behaves identically to no world at all.
+// ---------------------------------------------------------------------------
+
+/// Counts the frames it is asked to run.
+class CountingSystem final : public engine::ecs::System
+{
+public:
+    void update(engine::ecs::EntityManager& entities, const ActionState& actions, const float deltaSeconds) override
+    {
+        static_cast<void>(entities);
+        static_cast<void>(actions);
+        static_cast<void>(deltaSeconds);
+        ++m_frames;
+    }
+
+    [[nodiscard]] const char* name() const override { return "CountingSystem"; }
+    [[nodiscard]] int frames() const noexcept { return m_frames; }
+
+private:
+    int m_frames = 0;
+};
+
+void testTheApplicationSystemsDoNotRunWhileASceneIs()
+{
+    // Registered on the application, *before* any scene exists. If the loop drove the
+    // application's systems as well as the scene's, this counter would move - and
+    // with the empty application world there is nothing else that could notice.
+    auto ledger = std::make_shared<SceneLedger>();
+    engine::Application application;
+    static_cast<void>(ledger);
+
+    // `add` hands back a reference to the system it stored, which is how the counter
+    // is read: `systemAt` returns the `System` base, and the base has no idea what
+    // this subclass counts. The reference stays valid because this is the only system
+    // ever added - registering another would invalidate it, as `SystemManager` says.
+    CountingSystem& counter = application.systemManager().add<CountingSystem>();
+    CHECK(application.systemManager().systemCount() == 1U);
+
+    // The contrast first: with no scene, the system's own world is what runs.
+    application.update();
+    CHECK(counter.frames() == 1);
+
+    // Now a scene takes over.
+    application.changeScene(SceneId::Menu);
+    application.update();
+    application.update();
+
+    // The scene is active, and the application's systems have not run since. The
+    // counter is still one: those two frames belonged to the menu's world.
+    CHECK(activeSceneIs(application, SceneId::Menu));
+    CHECK(counter.frames() == 1);
+
+    // And the application's world is untouched by the scene's frames, while the
+    // menu's own world is the one that is there.
+    CHECK(application.entityManager().aliveEntityCount() == 0U);
+    const auto* menu = dynamic_cast<const MenuScene*>(application.currentScene());
+    CHECK(menu != nullptr);
+    if (menu != nullptr)
+    {
+        CHECK(menu->world().aliveEntityCount() == 4U);
+    }
+}
+
+void testTheApplicationWorldIsNotRenderedWhileASceneIs()
+{
+    // The same shape for drawing, and the probe is an entity that would *fail* to draw
+    // if it were reached: a text entity naming a font that is not in the asset table.
+    // A rectangle would be drawn harmlessly and change nothing observable, so it would
+    // prove nothing; a missing font makes `RenderSystem` throw, and a frame that
+    // throws is a difference a test can see.
+    //
+    // The claim is precise and worth stating: **while a scene is active the render
+    // pass does not touch the application's world at all** - not "draws it as well",
+    // not "draws it if it happens to be non-empty". The application's world is not
+    // the frame's subject; the scene's is.
+    engine::Application application;
+    application.changeScene(SceneId::Menu);
+    application.update();
+
+    engine::ecs::Entity& poison = application.entityManager().addEntity("poison");
+    poison.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    Text text;
+    text.content = "NOT A FONT";
+    text.fontAssetName = "fonts_this_font_does_not_exist";
+    text.characterSize = 12U;
+    poison.addComponent<Text>(text);
+
+    // Three frames, and none of them threw - so the application's world was not
+    // rendered. The render pass only ever saw the menu's four entities.
+    application.update();
+    application.render();
+    application.update();
+    application.render();
+
+    CHECK(application.entityManager().aliveEntityCount() == 1U);
+
+    // The contrast: the same world, with no scene, *does* fail to draw. Without this
+    // the assertion above could be passing because the poison never worked, and a
+    // probe that cannot fail is not a probe.
+    engine::Application withoutScene;
+    engine::ecs::Entity& alsoPoison = withoutScene.entityManager().addEntity("poison");
+    alsoPoison.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    Text alsoText;
+    alsoText.content = "NOT A FONT";
+    alsoText.fontAssetName = "fonts_this_font_does_not_exist";
+    alsoText.characterSize = 12U;
+    alsoPoison.addComponent<Text>(alsoText);
+
+    bool threw = false;
+    try
+    {
+        withoutScene.render();
+    }
+    catch (const engine::assets::AssetNotFoundError&)
+    {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+void testASceneRequestLastsOneFrame()
+{
+    // The rule [Scene::update] enforces, checked directly rather than through the
+    // owner: a request is live for exactly one frame.
+    //
+    // This is what a missing clear looks like from the outside, and the consequence is
+    // why the clear lives in the base class. A scene that asked and was not answered -
+    // because the owner had already queued a request of its own, which wins - would
+    // ask again on every frame, and would keep winning once the owner's request had
+    // been spent. The game would flip between two scenes with no error anywhere. So
+    // the request is cleared, here, by construction.
+    SceneFixture fixture;
+    MenuScene menu{fixture.context()};
+
+    menu.update(ActionDriver{}.pressedNow(Key::Space), 0.016F);
+    CHECK(menu.pendingTransition().scene().has_value());
+    CHECK(menu.pendingTransition().scene().value() == SceneId::Play);
+
+    // The next frame, whatever happens, starts with nothing asked for.
+    menu.update(ActionDriver{}.idle(), 0.016F);
+    CHECK_FALSE(menu.pendingTransition().scene().has_value());
+    CHECK_FALSE(menu.pendingTransition().quits());
+
+    // And the frame after that is the same: it is not a one-off reset.
+    menu.update(ActionDriver{}.idle(), 0.016F);
+    CHECK_FALSE(menu.pendingTransition().scene().has_value());
+
+    // The same for a quit request, since it is stored in the same field.
+    menu.update(ActionDriver{}.pressedNow(Key::S), 0.016F);
+    menu.update(ActionDriver{}.pressedNow(Key::Space), 0.016F);
+    CHECK(menu.pendingTransition().quits());
+    menu.update(ActionDriver{}.idle(), 0.016F);
+    CHECK_FALSE(menu.pendingTransition().quits());
 }
 
 // ---------------------------------------------------------------------------
@@ -1852,6 +2043,48 @@ void testScreenSpaceIsHonouredByTheTextQueryOnly()
 /// is anything declared `constexpr`: a `constexpr` object has the same value in
 /// every translation unit and cannot be written to, so it is not shared mutable
 /// state, and the configuration constants this engine has are all `inline constexpr`.
+/// The data members `code` declares, found by a line that is a member declaration:
+/// indentation, a type, an `m_`-prefixed name, then an optional initialiser and a
+/// semicolon.
+///
+/// The type may carry one level of template argument, because
+/// `std::optional<SceneId> m_scene;` is one of the seven and a pattern without it
+/// reported six: a member silently missing from the count is worse than one missing
+/// from the file.
+///
+/// ### Why a source scan
+///
+/// A member nobody reads has no behaviour, so no run-time test can notice it. A
+/// back-pointer to the owner added "for later" is exactly that: it compiles, it
+/// changes nothing, and it is the first step towards a scene that can reach the
+/// whole engine. The mutation `scene-holds-a-back-pointer-to-the-owner` exists in the
+/// mutation suite to keep that honest, and this is what catches it.
+[[nodiscard]] std::vector<std::string> declaredDataMembers(const std::string& code)
+{
+    static const std::regex member{
+        // Two adjacent literals, and the first one is closed with `)"` on its own
+        // line. The version without that `)` did not terminate: the raw string ran on
+        // into the second literal, so the pattern being compiled contained a newline
+        // and the text `R"(` - and it matched three of the seven members. A regex
+        // that silently matches the wrong subset is worse than one that matches none.
+        R"(^\s+(?:const\s+)?[A-Za-z_][\w:]*(?:\s*<[^<>;]*>)?(?:\s*[*&])?\s+)"
+        R"((m_\w+)\s*(?:=[^;]*|\{[^;]*\})?;\s*$)"};
+
+    std::vector<std::string> found;
+    std::istringstream lines{code};
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        std::smatch match;
+        if (std::regex_match(line, match, member))
+        {
+            found.push_back(match[1].str());
+        }
+    }
+
+    return found;
+}
+
 [[nodiscard]] bool declaresStaticStorage(const std::string& code)
 {
     std::size_t at = code.find("static");
@@ -2039,6 +2272,68 @@ void testScenesNameNoKeysAndReadActions()
     CHECK(has(play, "input::Action::Quit"));
 }
 
+void testTheSceneBaseHoldsNothingButAContextAndARequest()
+{
+    // The base class's entire state, pinned.
+    //
+    // A scene needs two things from its base: the borrowed context, and somewhere to
+    // record what it wants next. Anything else a `Scene` gains is a decision nobody
+    // made yet - and the one that matters is a pointer to the owner, which is how
+    // "a scene cannot reach the application" quietly stops being true while every
+    // behavioural test still passes.
+    //
+    // Adding a member is a source-level change with no run-time effect, so this is a
+    // source check and says so. It checks *which* members exist rather than what they
+    // are called, so a differently-named back-pointer does not slip through.
+    const std::string code = codeWithoutComments(ENGINE_SCENE_HEADER);
+    const std::vector<std::string> members = declaredDataMembers(code);
+
+    // All three classes' state at once, because the header *is* the scene layer's
+    // state and checking them separately would let an extra member in through the
+    // gap:
+    //
+    //   SceneTransition  m_scene, m_quit                      - what a scene asked
+    //   SceneContext     m_renderer, m_camera, m_assets       - three borrowed pointers
+    //   Scene            m_context, m_transition              - the context, the request
+    //
+    // Seven, no more. A back-pointer to the owner would be an eighth.
+    //
+    // Checked by name rather than by count alone, so a failure says *which* member
+    // appeared instead of only that the number moved.
+    const std::vector<std::string> expected{
+        "m_assets", "m_camera", "m_context", "m_quit", "m_renderer", "m_scene", "m_transition"};
+
+    CHECK(members.size() == expected.size());
+    for (const std::string& name : expected)
+    {
+        const auto found = std::find(members.begin(), members.end(), name);
+        if (found == members.end())
+        {
+            std::cerr << "    expected a data member named " << name << "\n";
+        }
+        CHECK(found != members.end());
+    }
+
+    // And the two accessors that expose the base's state are the only way out of it.
+    CHECK(containsWord(code, "context"));
+    CHECK(containsWord(code, "pendingTransition"));
+
+    // The context's three pointers are all it holds, so it cannot reach the window,
+    // the action map or the running flag even by accident.
+    const std::vector<std::string> contextMembers = [&members] {
+        std::vector<std::string> only;
+        for (const std::string& name : members)
+        {
+            if (name == "m_renderer" || name == "m_camera" || name == "m_assets")
+            {
+                only.push_back(name);
+            }
+        }
+        return only;
+    }();
+    CHECK(contextMembers.size() == 3U);
+}
+
 void testThereIsNoGlobalSceneManager()
 {
     // A singleton scene manager cannot be observed at run time. A test can only
@@ -2175,6 +2470,11 @@ int main()
         {"sceneId is asked of the scene", &testSceneIdIsAskedOfTheScene},
         {"an application without a scene still works", &testApplicationWithoutASceneStillWorks},
         {"the world of an old scene is gone", &testTheWorldOfAnOldSceneIsGone},
+        {"the application systems do not run while a scene is",
+         &testTheApplicationSystemsDoNotRunWhileASceneIs},
+        {"the application world is not rendered while a scene is",
+         &testTheApplicationWorldIsNotRenderedWhileASceneIs},
+        {"a scene request lasts one frame", &testASceneRequestLastsOneFrame},
         // E. Screen space
         {"the menu text is screen space", &testTheMenuTextIsScreenSpace},
         {"camera movement does not move menu text", &testCameraMovementDoesNotMoveMenuText},
@@ -2189,6 +2489,8 @@ int main()
         {"scenes do not register into the application", &testScenesDoNotRegisterIntoTheApplication},
         {"the scene headers are sfml free", &testTheSceneHeadersAreSfmlFree},
         {"scenes name no keys and read actions", &testScenesNameNoKeysAndReadActions},
+        {"the scene base holds nothing but a context and a request",
+         &testTheSceneBaseHoldsNothingButAContextAndARequest},
         {"there is no global scene manager", &testThereIsNoGlobalSceneManager},
         {"the engine layers below do not know about scenes", &testTheEngineLayersBelowDoNotKnowAboutScenes},
     };
