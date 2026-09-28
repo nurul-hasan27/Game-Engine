@@ -315,6 +315,29 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME input.action_abstraction COMMAND action_test)
     set_tests_properties(input.action_abstraction PROPERTIES TIMEOUT 120)
 
+    # Text: the component, the renderer's draw operation, the system's query, and
+    # real pixels from the three committed fonts.
+    #
+    # Two halves, and both are here on purpose. The pixel groups need a real window
+    # and the real font loader, so they cannot be a pure unit test; the component
+    # and query groups use a recording renderer and a double manager, so they are
+    # deterministic and headless. Either half alone would leave a gap: pixels alone
+    # would not pin the interface, and the interface alone would not prove a glyph
+    # is ever drawn.
+    add_executable(text_test tests/TextTest.cpp)
+    target_link_libraries(text_test PRIVATE engine)
+    target_compile_options(text_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(text_test PRIVATE
+        ENGINE_TEXT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/components/Text.hpp"
+        ENGINE_RENDERER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/graphics/Renderer.hpp"
+        ENGINE_SFML_RENDERER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/graphics/SfmlRenderer.hpp"
+        ENGINE_SFML_RENDERER_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/graphics/SfmlRenderer.cpp"
+        ENGINE_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/RenderSystem.hpp"
+        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp"
+        ENGINE_FONT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Font.hpp")
+    add_test(NAME render.text COMMAND text_test)
+    set_tests_properties(render.text PROPERTIES TIMEOUT 300)
+
     # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
     #
     # No window and no real textures: the loader is driven through the AssetManager
