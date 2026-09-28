@@ -32,6 +32,7 @@
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/RenderTransform.hpp"
 #include "engine/graphics/SfmlRenderer.hpp"
+#include "engine/components/Animation.hpp"
 #include "engine/components/Rectangle.hpp"
 #include "engine/input/Action.hpp"
 #include "engine/input/ActionMap.hpp"
@@ -1159,23 +1160,61 @@ void testThePlaySceneFlushesItsOwnDeferredDestruction()
     SceneFixture fixture;
     PlayScene play{fixture.context()};
 
-    // The level carries animations that do not repeat, and `AnimationSystem` flags
-    // their entities for destruction. The scene owns the world, so the scene has to
-    // flush it - the owner's `EntityManager` is a *different* world and would never
-    // see these entities, so a level that only flushed the owner's would grow every
-    // frame without bound.
     const std::size_t initialStored = play.world().storedEntityCount();
+    const std::size_t initialAlive = play.world().aliveEntityCount();
     CHECK(initialStored > 0U);
+    CHECK(initialStored == initialAlive);
 
+    // ### Why entities are added here rather than loaded
+    //
+    // The first version of this group ran four hundred frames against the committed
+    // level and asserted that the stored count had not grown. Removing the flush
+    // changed nothing and the mutation passed - because **nothing in the committed
+    // level is ever destroyed**. Every animation the level uses is single frame with
+    // `repeat` true: five ground, pipe and bush tiles, and a cloud or two. A ground
+    // tile that vanished when its one frame elapsed would be a bug, which is exactly
+    // why the loader sets `repeat` and why this assertion was vacuous.
+    //
+    // So the observable is built here instead. The scene exposes its own world
+    // precisely so that something can be put in it, and a *non-repeating* animation
+    // is the thing `AnimationSystem` actually defers - so one is added, and the
+    // flush is then observable.
+    const auto addAnimation = [&play](const char* const tag, const char* const asset, const bool repeat) {
+        engine::ecs::Entity& entity = play.world().addEntity(tag);
+        entity.addComponent<Transform>(Transform{Vec2{0.0F, 0.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+        engine::components::Animation animation;
+        animation.assetName = asset;
+        animation.repeat = repeat;
+        entity.addComponent<engine::components::Animation>(animation);
+    };
+
+    // Two frames, twelve frames, and a looping pair, all from the committed library.
+    addAnimation("burst", "animations_explosion_burst", false);
+    addAnimation("shot", "megaman_megaBuster_shot", false);
+    addAnimation("walker", "mario_GoombaWalk_walk", true);
+
+    const std::size_t withExtras = play.world().storedEntityCount();
+    CHECK(withExtras == initialStored + 3U);
+
+    // Long enough for a twelve frame animation at its declared speed to finish, many
+    // times over.
     for (int frame = 0; frame < 400; ++frame)
     {
         play.update(ActionState{}, 0.1F);
     }
 
-    // Stored never exceeds the initial total: entities flagged for destruction are
-    // erased rather than piling up as destroyed-but-still-held records.
-    CHECK(play.world().storedEntityCount() <= initialStored);
-    CHECK(play.world().aliveEntityCount() > 0U);
+    // The two non-repeating ones are gone - not merely dead, *gone*: the stored count
+    // is what proves the flush happened, because a flagged-but-unpurged entity still
+    // occupies its slot. This is the assertion the mutation broke, and it could not
+    // have existed against the level alone.
+    CHECK(play.world().aliveEntityCount() == initialAlive + 1U);
+    CHECK(play.world().storedEntityCount() == initialStored + 1U);
+
+    // And the looping one is still there, so what was removed was the *finished* pair
+    // and not simply the last three.
+    CHECK(play.world().getEntities("walker").begin() != play.world().getEntities("walker").end());
+    CHECK(play.world().getEntities("burst").begin() == play.world().getEntities("burst").end());
+    CHECK(play.world().getEntities("shot").begin() == play.world().getEntities("shot").end());
 }
 
 // ---------------------------------------------------------------------------
@@ -1262,7 +1301,14 @@ void testATransitionDestroysTheOldScene()
     application->update();
 
     CHECK(application->currentScene() != nullptr);
-    CHECK(std::string{application->currentScene()->name()} == "menu");
+    // Guarded rather than dereferenced straight away. A mutation that stops a scene
+    // from ever existing leaves this null, and an unguarded `->name()` is a
+    // segfault: the suite dies, ctest reports `SEGFAULT` rather than `Failed`, and
+    // every other group in this file loses its verdict too.
+    if (application->currentScene() != nullptr)
+    {
+        CHECK(std::string{application->currentScene()->name()} == "menu");
+    }
     CHECK(ledger->alive.size() == 1U);
     if (!ledger->alive.empty())
     {
@@ -1294,7 +1340,10 @@ void testATransitionDestroysTheOldScene()
     // reason: it would report the allocator's mood rather than the scene's
     // lifetime. The ledger's `destroyed` count and `alive` list are the evidence;
     // this is the confirmation, and it holds whatever the allocator does.
-    CHECK(std::string{application->currentScene()->name()} == "play");
+    if (application->currentScene() != nullptr)
+    {
+        CHECK(std::string{application->currentScene()->name()} == "play");
+    }
 }
 
 void testNoSceneIsDestroyedWhileItIsRunning()
@@ -1512,7 +1561,10 @@ void testSceneIdIsAskedOfTheScene()
 
     CHECK(application.sceneId().has_value());
     CHECK(activeSceneIs(application, SceneId::Play));
-    CHECK(std::string{application.currentScene()->name()} == "liar");
+    if (application.currentScene() != nullptr)
+    {
+        CHECK(std::string{application.currentScene()->name()} == "liar");
+    }
 }
 
 void testApplicationWithoutASceneStillWorks()

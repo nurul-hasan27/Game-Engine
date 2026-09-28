@@ -606,6 +606,20 @@ def classify(clean_failed, abnormal, ran_suites, build_ok, timeouts):
     return "UNDETECTED"
 
 
+def verify_green():
+    """The reverted tree must be green before the next mutation is measured.
+
+    Without this, a mutation can inherit the previous one's broken binary and be
+    reported against a build it never had.
+    """
+    clean, abnormal, ran, timeouts, _ = run_all_tests()
+    if clean or abnormal or timeouts:
+        raise RuntimeError("reverted tree is not green: clean={} abnormal={} timeouts={}".format(
+            clean, abnormal, timeouts))
+    if len(ran) != len(EXPECTED_TESTS):
+        raise RuntimeError("reverted tree ran {} of {} suites".format(len(ran), len(EXPECTED_TESTS)))
+
+
 def main():
     only = sys.argv[1:] if len(sys.argv) > 1 else None
     entries = [m for m in MUTATIONS if not only or m["name"] in only]
@@ -674,8 +688,20 @@ def main():
             reverted = True
         if not reverted:
             revert(entry)
-        # Rebuild so the next mutation starts from a clean, correct tree.
-        build()
+        # Rebuild so the next mutation starts from a clean, correct tree - and check
+        # that it actually succeeded.
+        #
+        # This is not defensive noise. An earlier run reported
+        # `scene-holds-a-back-pointer-to-the-owner` as CRASHED when it detects cleanly
+        # in isolation, because a previous mutation's revert-and-rebuild had not
+        # completed and the next mutation's ctest ran against a stale binary. A
+        # mutation result is only worth as much as the build it was measured on, so a
+        # failed rebuild is now a hard error rather than a wrong verdict.
+        restored_ok, restored_output = build()
+        if not restored_ok:
+            raise RuntimeError("rebuild after reverting {} failed:\n{}".format(
+                entry["name"], restored_output[-2000:]))
+        verify_green()
 
         results.append({
             "name": entry["name"],

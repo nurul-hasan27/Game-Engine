@@ -63,7 +63,28 @@ public:
 
     [[nodiscard]] SceneId id() const noexcept override { return SceneId::Play; }
 
-    /// The level's own world, for tests that want to count its entities.
+    /// The level's own world, for tests and for spawning into the scene.
+    ///
+    /// ### Both a const and a mutable accessor, and why the mutable one exists
+    ///
+    /// The const overload is for inspection. The mutable one is for putting things
+    /// *into* the level, which is not a test convenience: a game that spawns a
+    /// bullet or a pickup needs somewhere to add it, and the scene owns the world
+    /// that has to happen in. Reaching for [engine::Application::entityManager]
+    /// instead would be reaching the wrong world - the application's, which while a
+    /// scene is active is not the frame's subject and is never drawn.
+    ///
+    /// The scene still *owns* the world: handing out a reference to a member is not
+    /// giving up ownership, and it is the same thing `Application::entityManager`
+    /// already does for its own.
+    ///
+    /// It is also what makes the deferred-destruction guarantee observable. The
+    /// committed level contains nothing that is ever destroyed - every animation it
+    /// uses is single frame and repeating, because a ground tile that vanished when
+    /// its one frame elapsed would be a bug - so a scene's flush is a no-op until
+    /// something non-repeating is in the world. A test cannot demonstrate that from
+    /// a const view.
+    [[nodiscard]] ecs::EntityManager& world() noexcept { return m_world; }
     [[nodiscard]] const ecs::EntityManager& world() const noexcept { return m_world; }
 
     /// The scene's own systems, for tests that want to count them.
