@@ -78,4 +78,35 @@ inline constexpr float kDegreesPerRadian = 57.295779513082320876798154814105F;
                            transform.angle * kDegreesPerRadian};
 }
 
+/// A placement whose position is already in screen pixels, with the camera not applied.
+///
+/// ### The counterpart to [toRenderTransform]
+///
+/// [toRenderTransform] is what makes a world position land in the right pixel: it
+/// moves the point by the camera and multiplies the size by the zoom. This does
+/// neither, so an entity placed with it keeps its position and its size no matter
+/// where the camera is or how far it is zoomed.
+///
+/// That is exactly what a menu wants, and it is why the two are separate functions
+/// rather than a flag on one. A flag would have to be threaded through every call
+/// site, and the two answers are different enough - one ignores the camera, one
+/// requires it - that a shared signature would hide which is wanted.
+///
+/// ### What it still applies
+///
+/// Scale and rotation, unchanged. They belong to the entity rather than to the
+/// camera, so a screen-space label can still be scaled or turned; what it cannot do
+/// is be *moved* or *magnified* by the camera, which is the whole point.
+///
+/// ### The angle conversion is repeated on purpose
+///
+/// The degrees conversion is one multiplication, and a helper called from two
+/// places to perform it would be a place for the two to disagree. A rotated
+/// screen-space entity has to be rotated by the same rule as a rotated world one,
+/// and the test that checks they agree checks both of these.
+[[nodiscard]] constexpr RenderTransform toScreenTransform(const components::Transform& transform) noexcept
+{
+    return RenderTransform{transform.position, transform.scale, transform.angle * kDegreesPerRadian};
+}
+
 } // namespace engine::graphics

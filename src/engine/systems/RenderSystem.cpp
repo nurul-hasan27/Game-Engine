@@ -2,6 +2,7 @@
 
 #include "engine/components/Animation.hpp"
 #include "engine/components/Rectangle.hpp"
+#include "engine/components/ScreenSpace.hpp"
 #include "engine/components/Text.hpp"
 #include "engine/components/Texture.hpp"
 #include "engine/components/Transform.hpp"
@@ -166,8 +167,24 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, const input::Act
         // `drawRectangle` does, so the default lives here as a named constant
         // rather than being buried in the graphics layer. Nothing has asked for
         // coloured text, and the course does not ask for it.
+        //
+        // ### Screen space, and only screen space
+        //
+        // An entity carrying `components::ScreenSpace` is already positioned in
+        // screen pixels, so the camera is not applied to it and the zoom does not
+        // scale it. A menu title stays at the top of the window when the player
+        // walks to the right, which is the whole requirement.
+        //
+        // The choice is made here rather than in the component, which is the same
+        // arrangement this file already uses to decide that an animation wins over
+        // a plain texture: the two components stay unaware of each other and the
+        // system owns the policy. One rule, in one place.
+        const graphics::RenderTransform placement = entity.hasComponent<components::ScreenSpace>()
+                                                         ? graphics::toScreenTransform(transform)
+                                                         : graphics::toRenderTransform(transform, *m_camera);
+
         m_renderer->drawText(m_assets.font(text.fontAssetName), text.content, text.characterSize, kDefaultTextColor,
-                             graphics::toRenderTransform(transform, *m_camera));
+                             placement);
     }
 }
 
