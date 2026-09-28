@@ -463,7 +463,18 @@ void testAMissingFieldIsRejectedAndNamed()
 
     CHECK_FALSE(message.empty());
     CHECK(contains(message, "line 1"));
+
+    // "is missing" is the part only the *by-name* message says. The first version of
+    // this assertion looked for "bulletAnimationName", which the trailing
+    // `expected: Player <gridX> ... <bulletAnimationName>` hint also contains - so it
+    // passed for the wrong reason and a mutation that swapped by-name reporting for
+    // by-count reporting survived. The hint is present in both messages; this
+    // substring is not.
+    CHECK(contains(message, "is missing"));
     CHECK(contains(message, "bulletAnimationName"));
+
+    // And the count-only wording must NOT appear, which is the other half.
+    CHECK_FALSE(contains(message, "fields but must have exactly"));
 }
 
 void testATileMissingItsYIsRejected()
@@ -600,12 +611,32 @@ void testNegativePositionsAreAccepted()
 
 void testABlankAnimationNameIsRejected()
 {
-    // The tokenizer cannot produce an empty middle token, so this is reachable only
-    // through a real blank - which is exactly the case the check exists for.
+    // A double space where a name should be.
+    //
+    // Worth being precise about what is actually being tested, because the obvious
+    // reading is wrong. The parser *does* reject this line - but through the **arity**
+    // check, not through the blank-name guard: the tokenizer produces three tokens
+    // where four are required, because it never yields an empty run between two
+    // spaces. The blank-name guard is therefore unreachable through this parser, a
+    // mutation that disabled it was EQUIVALENT, and nothing here claims otherwise.
+    //
+    // The group is kept because the *observable contract* is worth pinning: a line
+    // with a missing field is refused, whichever of the two checks happens to catch
+    // it, and the reader gets a line number either way. If the tokenizer ever changes
+    // to yield empty tokens, this group will start passing through the other guard,
+    // and the message will change - which is the signal that the guard became live.
     const std::string message = parseErrorMessage(withPlayer("Tile  0 0"));
 
     CHECK_FALSE(message.empty());
     CHECK(contains(message, "line 1"));
+    CHECK(contains(message, "is missing"));
+    CHECK(contains(message, "animationName"));
+
+    // The line is short, not long: the tokenizer collapsed the run of spaces rather
+    // than counting it as an empty field. Asserted, because that collapse is the
+    // reason the blank-name guard is unreachable, and it would otherwise be a silent
+    // assumption.
+    CHECK_FALSE(contains(message, "fields but must have exactly"));
 }
 
 void testASecondPlayerLineIsRejected()
@@ -678,6 +709,30 @@ void testEveryErrorMessageCarriesALineNumber()
     CHECK(contains(shortLine, "line 4:"));
     CHECK(contains(badNumber, "line 4:"));
     CHECK(contains(extra, "line 4:"));
+}
+
+void testANumberErrorCarriesTheExpectedSyntax()
+{
+    // Every number error ends with `expected: <the record's syntax line>`, so a
+    // reader who mistyped a field is shown the whole correct line rather than left to
+    // consult a document. Asserted on a *number* error specifically: the arity errors
+    // build their own hint inline, so asserting only on those would leave this path
+    // untested - and a mutation that emptied the shared hint string survived because
+    // nothing looked at it.
+    const std::string tile = parseErrorMessage(withPlayer("Tile a 0 zz"));
+    CHECK(contains(tile, "expected: Tile   <animationName> <gridX> <gridY>"));
+
+    const std::string dec = parseErrorMessage(withPlayer("Dec a 0 zz"));
+    CHECK(contains(dec, "expected: Dec    <animationName> <x> <y>"));
+
+    const std::string player = parseErrorMessage("Player 0 0 32 32 100 200 300 zz b\n");
+    CHECK(contains(player, "expected: Player <gridX> <gridY>"));
+    CHECK(contains(player, "gravity"));
+
+    // Each record's own hint, not a shared one: a tile's error must not tell the
+    // reader to write a Player line.
+    CHECK_FALSE(contains(tile, "expected: Player"));
+    CHECK_FALSE(contains(player, "expected: Tile"));
 }
 
 void testAFailedParseYieldsNoLevel()
@@ -960,9 +1015,87 @@ void testTwoGridsOfDifferentHeightsPlaceTheSameRecordDifferently()
     CHECK_NEAR(b.y - a.y, 640.0F);
 }
 
-// ---------------------------------------------------------------------------
-// Spawning: tiles
-// ---------------------------------------------------------------------------
+void testTheExtentFollowsTheTallestTileNotJustTheTallestDecoration()
+{
+    // Both halves of the extent, in one level, chosen so neither can be dropped.
+    //
+    // A tile high in the level, and a decoration lower than it. If the tile term were
+    // removed, the answer would come from the decoration alone and be too small; if
+    // the cell height were forgotten, the tile's *top* would not be counted and the
+    // answer would be one cell too small. The committed level could not catch either,
+    // because its tallest thing is a decoration and its highest tile is four rows up.
+    Level level;
+    level.addTile(TileRecord{"mario_ground_tile", 0.0F, 9.0F, 1U});
+    level.addDecoration(DecorationRecord{"mario_BigBush_dec", 100.0F, 320.0F, 2U});
+
+    PlayerRecord player;
+    player.boundingBoxSize = Vec2{32.0F, 32.0F};
+    player.bulletAnimationName = "b";
+    level.setPlayer(player);
+
+    // The tile in row 9 has its top edge at row 10, so the level needs ten cells.
+    // The decoration is at 320px = 5 cells, well below that.
+    CHECK_NEAR(level.requiredCellsTall(), 10.0F);
+
+    // And a level whose only tall thing is a decoration is measured in the other
+    // unit, converted: 700 pixels is 10.9375 cells, not 700.
+    Level decorationOnly;
+    decorationOnly.addDecoration(DecorationRecord{"mario_BigBush_dec", 100.0F, 700.0F, 1U});
+    CHECK_NEAR(decorationOnly.requiredCellsTall(), 700.0F / 64.0F);
+}
+
+void testTheExtentFollowsTheWidestTile()
+{
+    // The same on the other axis, and the player counts too: a player in the last
+    // column needs that column to exist.
+    Level level;
+    level.addTile(TileRecord{"mario_ground_tile", 6.0F, 0.0F, 1U});
+
+    PlayerRecord player;
+    player.gridX = 3.0F;
+    player.boundingBoxSize = Vec2{32.0F, 32.0F};
+    player.bulletAnimationName = "b";
+    level.setPlayer(player);
+
+    // A tile in column 6 occupies columns 6, so seven cells are needed.
+    CHECK_NEAR(level.requiredCellsWide(), 7.0F);
+
+    // The player in column 3 needs nothing extra, and the tile still governs.
+    Level playerOnly;
+    playerOnly.setPlayer(player);
+    CHECK_NEAR(playerOnly.requiredCellsWide(), 4.0F);
+}
+
+void testSetPlayerKeepsTheFirstPlayer()
+{
+    // The parser refuses a second `Player` line outright, so this is reachable only
+    // by a hand-built `Level` - which is exactly the case that needs stating, because
+    // a `Level` can be built without the parser. The first call wins, so a caller
+    // cannot end up with a level whose player is whichever record was added last.
+    Level level;
+
+    PlayerRecord first;
+    first.gridX = 1.0F;
+    first.gridY = 2.0F;
+    first.boundingBoxSize = Vec2{40.0F, 60.0F};
+    first.leftRightSpeed = 200.0F;
+    first.bulletAnimationName = "first_bullet";
+
+    PlayerRecord second;
+    second.gridX = 9.0F;
+    second.gridY = 8.0F;
+    second.boundingBoxSize = Vec2{10.0F, 10.0F};
+    second.leftRightSpeed = 999.0F;
+    second.bulletAnimationName = "second_bullet";
+
+    level.setPlayer(first);
+    level.setPlayer(second);
+
+    CHECK(level.hasPlayer());
+    CHECK_NEAR(level.player().gridX, 1.0F);
+    CHECK_NEAR(level.player().leftRightSpeed, 200.0F);
+    CHECK(level.player().bulletAnimationName == "first_bullet");
+}
 
 /// A level with one tile of `animationName` at the given cell, and a valid player.
 [[nodiscard]] Level levelWithOneTile(const std::string& animationName, const float gridX, const float gridY)
@@ -1000,6 +1133,119 @@ void testATileCarriesTheAnimationTheLevelNamed()
             CHECK(animation.assetName == "mario_ground_tile");
         }
     }
+}
+
+void testTwoLoadersOverTwoManagersEachUseTheirOwn()
+{
+    // No hidden global.
+    //
+    // The lesson this engine drew in Lecture 20 is that a service reachable from
+    // anywhere is a singleton wearing a hat, and `Application` deliberately owns its
+    // one asset manager and hands it out by const reference. This is the test that
+    // says the *loader* kept that rule: two loaders, two different asset managers,
+    // and each resolves against its own. A loader that cached the last asset manager
+    // it was given in a file-scope variable would pass every other group here.
+    FakeAssetManager first;
+    first.declare("mario_ground_tile", 64, 64);
+    first.declare("megaman_megaBuster_shot", 32, 26);
+
+    FakeAssetManager second;
+    second.declare("mario_SmallPipe_tile", 70, 70);
+    second.declare("megaman_megaBuster_shot", 16, 16);
+
+    const LevelLoader firstLoader{first};
+    const LevelLoader secondLoader{second};
+
+    CHECK(&firstLoader.assets() == &first);
+    CHECK(&secondLoader.assets() == &second);
+
+    const LevelGrid grid = LevelGrid::withCellsTall(16.0F);
+
+    // The first loader can spawn a ground tile; the second cannot, because its
+    // manager has never heard of that animation.
+    EntityManager firstWorld;
+    static_cast<void>(firstLoader.spawn(levelWithOneTile("mario_ground_tile", 0.0F, 0.0F), firstWorld, grid));
+    CHECK(firstWorld.getEntities(engine::level::kTileTag).begin() != firstWorld.getEntities(engine::level::kTileTag).end());
+
+    EntityManager secondWorld;
+    bool threw = false;
+    try
+    {
+        static_cast<void>(secondLoader.spawn(levelWithOneTile("mario_ground_tile", 0.0F, 0.0F), secondWorld, grid));
+    }
+    catch (const engine::level::LevelAssetError&)
+    {
+        threw = true;
+    }
+
+    CHECK(threw);
+
+    // And the reverse: a pipe tile is unknown to the first manager and known to the
+    // second, so the two are genuinely different and not one shared table.
+    EntityManager thirdWorld;
+    threw = false;
+    try
+    {
+        static_cast<void>(firstLoader.spawn(levelWithOneTile("mario_SmallPipe_tile", 0.0F, 0.0F), thirdWorld, grid));
+    }
+    catch (const engine::level::LevelAssetError&)
+    {
+        threw = true;
+    }
+
+    CHECK(threw);
+
+    EntityManager fourthWorld;
+    static_cast<void>(secondLoader.spawn(levelWithOneTile("mario_SmallPipe_tile", 0.0F, 0.0F), fourthWorld, grid));
+    CHECK(fourthWorld.getEntities(engine::level::kTileTag).begin() != fourthWorld.getEntities(engine::level::kTileTag).end());
+}
+
+// ---------------------------------------------------------------------------
+// Spawning: tiles
+// ---------------------------------------------------------------------------
+
+void testEachTileKeepsItsOwnAnimationName()
+{
+    // The committed level has two tiles that are *not* the ground tile - the two
+    // halves of the pipe - and they name a different animation. A loader that wrote
+    // one animation name for every tile would satisfy every other group in this file,
+    // because the floor, the ledge and the ground all share a name.
+    FakeAssetManager assets;
+    declareTheCommittedLevel(assets);
+    const LevelLoader loader{assets};
+    const LevelGrid grid = LevelGrid::withCellsTall(16.0F);
+
+    const Level level = engine::level::loadLevelFile(ENGINE_COMMITTED_LEVEL_FILE);
+
+    EntityManager world;
+    static_cast<void>(loader.spawn(level, world, grid));
+
+    std::size_t ground = 0;
+    std::size_t pipe = 0;
+
+    for (auto&& [entity, collider, animation] :
+         world.query<engine::components::Collider, engine::components::Animation>())
+    {
+        if (entity.tag() != engine::level::kTileTag)
+        {
+            continue;
+        }
+
+        if (collider.size == Vec2(70.0F, 70.0F))
+        {
+            ++pipe;
+            // The pipe's own name, and the pipe's own size, on the same entity.
+            CHECK(animation.assetName == "mario_SmallPipe_tile");
+        }
+        else
+        {
+            ++ground;
+            CHECK(animation.assetName == "mario_ground_tile");
+        }
+    }
+
+    CHECK(ground == 22U);
+    CHECK(pipe == 2U);
 }
 
 void testATileIsAnchoredByItsAnimationSize()
@@ -1493,9 +1739,13 @@ void testAMissingTileAnimationFailsLoudly()
     }
 
     CHECK(threw);
-    CHECK(contains(message, "no_such_tile"));
-    CHECK(contains(message, "line 1"));
-    CHECK(contains(message, "Tile"));
+    // The whole clause, not just the name. The wrapped `AssetNotFoundError` quotes
+    // the animation name too, so an assertion on the name alone passed even when the
+    // level message stopped saying *which field on which line* asked for it - and a
+    // mutation that dropped exactly that survived. The record kind and field name
+    // appear only here.
+    CHECK(contains(message, "level file line 1"));
+    CHECK(contains(message, "Tile record's animationName 'no_such_tile'"));
 }
 
 void testAMissingDecorationAnimationFailsLoudly()
@@ -1541,6 +1791,12 @@ void testAMissingBulletAnimationFailsLoudly()
     PlayerRecord player;
     player.boundingBoxSize = Vec2{32.0F, 32.0F};
     player.bulletAnimationName = "no_such_bullet";
+
+    // A distinct line number, and asserted back. The default is 0 for a record built
+    // by hand rather than parsed, so asserting "line 1" would have been asserting an
+    // accident of the fixture; this checks that the loader propagates whatever the
+    // record carries, which is the property that matters when a level is parsed.
+    player.lineNumber = 42U;
     level.setPlayer(player);
 
     EntityManager throwawayWorld;
@@ -1558,8 +1814,9 @@ void testAMissingBulletAnimationFailsLoudly()
     }
 
     CHECK(threw);
-    CHECK(contains(message, "no_such_bullet"));
-    CHECK(contains(message, "bulletAnimationName"));
+    // Same reasoning as the tile case: the name alone is also in the wrapped cause.
+    CHECK(contains(message, "level file line 42"));
+    CHECK(contains(message, "bulletAnimationName 'no_such_bullet'"));
 }
 
 void testAMissingAnimationIsStillAnAssetNotFound()
@@ -1726,6 +1983,7 @@ int main()
          &testAShortSecondPlayerIsReportedAsShortBeforeItIsReportedAsADuplicate},
         {"an end of line hash is a token not a comment", &testAnEndOfLineHashIsATokenNotAComment},
         {"every error message carries a line number", &testEveryErrorMessageCarriesALineNumber},
+        {"a number error carries the expected syntax", &testANumberErrorCarriesTheExpectedSyntax},
         {"a failed parse yields no level", &testAFailedParseYieldsNoLevel},
         {"a missing file names the path", &testAMissingFileNamesThePath},
         {"the cell size is sixty four", &testTheCellSizeIsSixtyFour},
@@ -1744,6 +2002,12 @@ int main()
         {"the pixel conversion inverts exactly", &testThePixelConversionInvertsExactly},
         {"two grids of different heights place the same record differently",
          &testTwoGridsOfDifferentHeightsPlaceTheSameRecordDifferently},
+        {"the extent follows the tallest tile not just the tallest decoration",
+         &testTheExtentFollowsTheTallestTileNotJustTheTallestDecoration},
+        {"the extent follows the widest tile", &testTheExtentFollowsTheWidestTile},
+        {"set player keeps the first player", &testSetPlayerKeepsTheFirstPlayer},
+        {"two loaders over two managers each use their own", &testTwoLoadersOverTwoManagersEachUseTheirOwn},
+        {"each tile keeps its own animation name", &testEachTileKeepsItsOwnAnimationName},
         {"a tile carries the animation the level named", &testATileCarriesTheAnimationTheLevelNamed},
         {"a tile is anchored by its animation size", &testATileIsAnchoredByItsAnimationSize},
         {"a tile collider is the animation size", &testATileColliderIsTheAnimationSize},

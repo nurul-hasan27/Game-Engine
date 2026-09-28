@@ -205,10 +205,21 @@ constexpr std::size_t kTokenCapacity = kMaxTokenCount + 1U;
 
 /// Reads an animation name and refuses a blank one.
 ///
-/// A name here is a reference into the asset configuration, so an empty reference
-/// is a reference to nothing. Catching it at parse time names the line; catching it
-/// at spawn time would name the line too, via [TileRecord::lineNumber], but by then
-/// the reason is much further from the cause.
+/// ### This guard is currently unreachable, and that is on purpose
+///
+/// The tokenizer splits on whitespace and only ever yields non-empty runs, so no
+/// `Tile`, `Dec` or `Player` line can produce an empty name through this parser. A
+/// mutation that turned this function into a no-op therefore changed no observable
+/// behaviour, and was classified EQUIVALENT rather than detected.
+///
+/// It is kept anyway, and the reason is worth stating plainly. This function encodes
+/// the invariant the assignment states about asset names - *"std::string (it will
+/// have no spaces)"* - and the *day* a name stops being a bare run (quoted names, a
+/// CSV form, a name taken from a wider field) this is the check that already exists
+/// and already says the right thing. Deleting an unreachable guard because it is
+/// unreachable would trade a documented invariant for nothing.
+///
+/// It is **not** counted as coverage. Nothing in the test suite claims to reach it.
 void requireAnimationName(const std::string_view name, const char* const fieldName,
                           const LevelRecordKind kind, const std::size_t lineNumber)
 {
