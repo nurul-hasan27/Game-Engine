@@ -827,7 +827,37 @@ void testTheTextQueryDrawsEntitiesWithText()
     if (!renderer.textDraws().empty())
     {
         CHECK(renderer.textDraws().front().content == "SCORE 100");
-        CHECK(renderer.textDraws().front().characterSize == 24U);
+    }
+}
+
+void testTheTextQueryPassesTheComponentCharacterSizeThrough()
+{
+    // A **non-default** size, on purpose.
+    //
+    // Asserting the size was 24 proved nothing about pass-through, because 24 is
+    // also the component's default *and* the value a plausible mistake would
+    // hard-code. A mutation that ignored the component and always submitted 24
+    // passed every group in this file. 7 is nothing to do with either number, so it
+    // can only survive if the component's field is genuinely being read.
+    //
+    // Two entities at two deliberately different sizes, and each keeps its own.
+    DoubleAssetManager assets;
+    RecordingRenderer renderer;
+    Camera camera = identityCamera();
+    RenderSystem system{renderer, camera, assets};
+
+    EntityManager world;
+    addTextEntity(world, "SMALL", kFontPixeled, 7U, Vec2{10.0F, 10.0F});
+    addTextEntity(world, "LARGE", kFontPixeled, 64U, Vec2{80.0F, 80.0F});
+
+    const ActionState actions;
+    system.update(world, actions, 0.0F);
+
+    CHECK(renderer.textDraws().size() == 2U);
+    if (renderer.textDraws().size() == 2U)
+    {
+        CHECK(renderer.textDraws()[0].characterSize == 7U);
+        CHECK(renderer.textDraws()[1].characterSize == 64U);
     }
 }
 
@@ -1357,6 +1387,63 @@ void testTheContentChangesTheOutput()
     CHECK(one.count < ab0.count);
 }
 
+void testTheSpecificCharactersAreRenderedNotJustTheLength()
+{
+    // ### The gap this group closes
+    //
+    // `the content changes the output` compares three strings and asserts how their
+    // widths relate. That is a real contract, but it is satisfied by *any* picture
+    // whose size depends on the string's **length**: a mutation that replaced the
+    // content with the same number of one repeated glyph kept every one of those
+    // relationships true, and passed.
+    //
+    // So the comparison here is length-matched and glyph-different. "AB0" and "XXX"
+    // are three characters each, and if the implementation is drawing the characters
+    // it was given, they cannot be the same picture. If it is drawing a constant,
+    // or a repeated glyph of the right count, they are - which is what makes this
+    // the group that distinguishes "renders the string" from "renders something of
+    // the right size".
+    RealRenderFixture fixture;
+    const Font& font = fixture.assets().font(kFontPixeled);
+    const RenderTransform centre{Vec2{200.0F, 100.0F}, Vec2{1.0F, 1.0F}, 0.0F};
+
+    const ChangedPixels ab0 = fixture.measureText(font, "AB0", 24U, centre);
+    const ChangedPixels xxx = fixture.measureText(font, "XXX", 24U, centre);
+    const ChangedPixels aaa = fixture.measureText(font, "AAA", 24U, centre);
+
+    CHECK(ab0.anythingChanged());
+    CHECK(xxx.anythingChanged());
+    CHECK(aaa.anythingChanged());
+
+    if (!(ab0.anythingChanged() && xxx.anythingChanged() && aaa.anythingChanged()))
+    {
+        return;
+    }
+
+    // Same length, different glyphs, different pictures. Not merely a different
+    // bounding box - a different *pixel count*, which no amount of re-spacing of one
+    // repeated glyph would produce.
+    CHECK(ab0.count != xxx.count);
+    CHECK(ab0.count != aaa.count);
+
+    // The same argument with an even tighter pair: two runs of the same length built
+    // from entirely different characters.
+    const ChangedPixels iii = fixture.measureText(font, "III", 24U, centre);
+    CHECK(iii.anythingChanged());
+    if (iii.anythingChanged())
+    {
+        CHECK(iii.count != xxx.count);
+    }
+
+    // And a string of the *same* content drawn twice is identical, which is what
+    // makes the comparisons above about the content and not about the frame.
+    const ChangedPixels ab0Again = fixture.measureText(font, "AB0", 24U, centre);
+    CHECK(ab0Again.count == ab0.count);
+    CHECK(ab0Again.width() == ab0.width());
+    CHECK(ab0Again.minX == ab0.minX);
+    CHECK(ab0Again.minY == ab0.minY);
+}
+
 void testTheColourIsHonoured()
 {
     // Exactly, not approximately: the fill colour is written straight into the
@@ -1681,6 +1768,135 @@ void testTheFontHandleGainedOnlyTheRendererAsAFriend()
     CHECK_FALSE(has(code, "sf::Texture"));
 }
 
+void testTheFontImplementationPointerStaysPrivate()
+{
+    // Phase 14 widened the *friends* and had to prove it widened nothing else. A
+    // friend is "this class may reach in"; the access specifier is "nobody else
+    // may". Losing the second while keeping the first would leave a handle whose
+    // native resource any caller could replace, and nothing would notice.
+    //
+    // Stated as a source check because "is this member accessible" is a question
+    // the type system answers by refusing to compile, and a test cannot ask it
+    // without trying to violate it. What is asserted is that the `private` label
+    // still governs the section the member is declared in.
+    const std::string code = codeOf(ENGINE_FONT_HEADER);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    const std::size_t privateAt = code.find("private:");
+    const std::size_t implAt = code.find("struct Impl;");
+    const std::size_t memberAt = code.find("m_impl;");
+
+    CHECK(privateAt != std::string::npos);
+    CHECK(implAt != std::string::npos);
+    CHECK(memberAt != std::string::npos);
+
+    if (privateAt == std::string::npos || implAt == std::string::npos || memberAt == std::string::npos)
+    {
+        return;
+    }
+
+    // The implementation type and its single member are both declared after the
+    // `private` label and before the next access specifier or the class's end.
+    CHECK(privateAt < implAt);
+    CHECK(implAt < memberAt);
+
+    // And `private:` is the **last** access specifier in the class, so there is no
+    // second entrance into the handle after it.
+    //
+    // Not "there is no public section", which would be wrong: a class body opens
+    // with `public:` for its constructors and move operations, and Font's does too.
+    // The claim being made is narrower and is about order - everything after
+    // `private:` stays inside it.
+    // `rfind` returns `npos` for a specifier that is not there at all, and every
+    // comparison against `npos` is false - so a missing `protected:` has to be
+    // recognised as missing rather than compared. That trap is the reason the
+    // check is written out rather than done with a clever expression.
+    const std::size_t lastPublic = code.rfind("public:");
+    if (lastPublic != std::string::npos)
+    {
+        CHECK(privateAt > lastPublic);
+    }
+
+    const std::size_t lastProtected = code.rfind("protected:");
+    if (lastProtected != std::string::npos)
+    {
+        CHECK(privateAt > lastProtected);
+    }
+}
+
+void testTheShippedGameAddsATextEntity()
+{
+    // The end-to-end demonstration, pinned at the only place it can be observed.
+    //
+    // The game builds its world in a function in `main`, which is not exposed as a
+    // callable unit, so there is nothing for a test to invoke and assert on. The
+    // game binary is already covered as a smoke test - there is a ctest that runs
+    // `game --frames 5` - and that test is what catches a *broken* label, because a
+    // missing font makes the game fail at run time. What it cannot catch is a label
+    // that is quietly absent, because an absent label costs the game nothing.
+    //
+    // So this is a source check, and it is honest about being one. The proper fix is
+    // for a later phase to give the world a name a test can call, which is scene
+    // work; until then this says the demonstration exists rather than pretending a
+    // runtime test could.
+    const std::string code = codeOf(ENGINE_MAIN_SOURCE);
+
+    CHECK(!code.empty());
+    if (code.empty())
+    {
+        return;
+    }
+
+    // It adds a label entity, from a helper, carrying a Text component.
+    CHECK(has(code, "addTextLabel("));
+    CHECK(has(code, "addComponent<Text>"));
+    CHECK(has(code, "#include \"engine/components/Text.hpp\""));
+
+    // And the label names a committed font rather than an invented one. The three
+    // names are pinned so a typo in a level of indirection is caught here rather
+    // than as a game that exits non-zero.
+    CHECK(has(code, "\"fonts_pixeled\""));
+
+    // Exactly one label, so "a demonstration" cannot quietly become "a pile of
+    // them" without anyone noticing: one declaration and one call.
+    CHECK(countOf(code, "addTextLabel(") == 2U);
+
+    // And the call is a **statement**, not something sitting in a disabled branch.
+    //
+    // Counting occurrences is a weak proxy, and a mutation found that out: writing
+    // `if (false) addTextLabel(...)` left the count at two and the label gone. An
+    // absent label costs the game nothing, so nothing at run time notices - the
+    // game would still exit zero and still draw a level. Requiring the call to
+    // *start* its own line is what makes the check say something about the call
+    // happening rather than about the text being present in the file.
+    bool foundCallStatement = false;
+    {
+        std::istringstream lines{code};
+        std::string line;
+        while (std::getline(lines, line))
+        {
+            const std::size_t firstNonSpace = line.find_first_not_of(" \t");
+            if (firstNonSpace != std::string::npos && line.compare(firstNonSpace, 13, "addTextLabel(") == 0)
+            {
+                foundCallStatement = true;
+                break;
+            }
+        }
+    }
+
+    if (!foundCallStatement)
+    {
+        std::cerr << "    main adds a text label, but not as a statement it reaches\n";
+    }
+
+    CHECK(foundCallStatement);
+}
+
 void testTheFontHeaderStillIncludesOnlyMemory()
 {
     // `AssetHandleTest` pins this, and it is worth checking here too: the friend
@@ -1722,6 +1938,8 @@ int main()
         // D. RenderSystem
         {"the text query draws entities with text", &testTheTextQueryDrawsEntitiesWithText},
         {"the text query resolves the font by name", &testTheTextQueryResolvesTheFontByName},
+        {"the text query passes the component character size through",
+         &testTheTextQueryPassesTheComponentCharacterSizeThrough},
         {"a missing font propagates out of the text query", &testAMissingFontPropagatesOutOfTheTextQuery},
         {"the text query reads the transform and never writes it", &testTheTextQueryReadsTheTransformAndNeverWritesIt},
         {"the text query applies the camera like every other query", &testTheTextQueryAppliesTheCameraLikeEveryOtherQuery},
@@ -1739,6 +1957,8 @@ int main()
         {"scale enlarges the text like any other renderable", &testScaleEnlargesTheTextLikeAnyOtherRenderable},
         {"the font actually changes the output", &testTheFontActuallyChangesTheOutput},
         {"the content changes the output", &testTheContentChangesTheOutput},
+        {"the specific characters are rendered not just the length",
+         &testTheSpecificCharactersAreRenderedNotJustTheLength},
         {"the colour is honoured", &testTheColourIsHonoured},
         {"an empty string draws nothing", &testAnEmptyStringDrawsNothing},
         {"text on a non black background is visible", &testTextOnANonBlackBackgroundIsVisible},
@@ -1752,6 +1972,8 @@ int main()
         {"only the sfml implementation names a sfml text", &testOnlyTheSfmlImplementationNamesASfmlText},
         {"the render system header stays sfml free", &testTheRenderSystemHeaderStaysSfmlFree},
         {"the font handle gained only the renderer as a friend", &testTheFontHandleGainedOnlyTheRendererAsAFriend},
+        {"the font implementation pointer stays private", &testTheFontImplementationPointerStaysPrivate},
+        {"the shipped game adds a text entity", &testTheShippedGameAddsATextEntity},
         {"the font header still includes only memory", &testTheFontHeaderStillIncludesOnlyMemory},
     };
 

@@ -334,7 +334,8 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_SFML_RENDERER_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/graphics/SfmlRenderer.cpp"
         ENGINE_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/RenderSystem.hpp"
         ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp"
-        ENGINE_FONT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Font.hpp")
+        ENGINE_FONT_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Font.hpp"
+        ENGINE_MAIN_SOURCE="${PROJECT_SOURCE_DIR}/src/main.cpp")
     add_test(NAME render.text COMMAND text_test)
     set_tests_properties(render.text PROPERTIES TIMEOUT 300)
 
