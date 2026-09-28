@@ -282,6 +282,28 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME animation.playback COMMAND animation_test)
     set_tests_properties(animation.playback PROPERTIES TIMEOUT 120)
 
+    # The action abstraction: the vocabulary, the binding table and the per-frame
+    # snapshot, plus the guarantee that a gameplay system cannot name a key.
+    #
+    # The groups that need a window use a real `sf::Event` and a real
+    # `SfmlKeyMap`, because the point of those is that the production chain is
+    # what is under test. The rest need no graphics at all.
+    add_executable(action_test tests/ActionTest.cpp)
+    target_link_libraries(action_test PRIVATE engine)
+    target_compile_options(action_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(action_test PRIVATE
+        ENGINE_ACTION_HEADER="${PROJECT_SOURCE_DIR}/include/engine/input/Action.hpp"
+        ENGINE_ACTION_MAP_HEADER="${PROJECT_SOURCE_DIR}/include/engine/input/ActionMap.hpp"
+        ENGINE_ACTION_STATE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/input/ActionState.hpp"
+        ENGINE_ACTION_MAP_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/input/ActionMap.cpp"
+        ENGINE_ACTION_STATE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/input/ActionState.cpp"
+        ENGINE_SFML_KEY_MAP_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/input/SfmlKeyMap.cpp"
+        ENGINE_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/ecs/System.hpp"
+        ENGINE_MOVEMENT_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/MovementSystem.hpp"
+        ENGINE_MOVEMENT_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/MovementSystem.cpp")
+    add_test(NAME input.action_abstraction COMMAND action_test)
+    set_tests_properties(input.action_abstraction PROPERTIES TIMEOUT 120)
+
     # Input: the key state machine, the SFML key adapter, and MovementSystem.
     add_executable(input_test tests/InputTest.cpp)
     target_link_libraries(input_test PRIVATE engine)
