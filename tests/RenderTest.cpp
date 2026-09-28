@@ -179,14 +179,40 @@ public:
         return found->second;
     }
 
+    const assets::Animation& animation(const std::string_view name) const override
+    {
+        const auto found = m_animations.find(std::string{name});
+        if (found == m_animations.end())
+        {
+            throw assets::AssetNotFoundError{"no animation named '" + std::string{name} + "'"};
+        }
+
+        return found->second;
+    }
+
     /// Pre-declares a name, so `texture(name)` will resolve.
     void declare(const std::string& name) { m_textures.emplace(name, assets::Texture{}); }
+
+    /// Pre-declares an animation, so `animation(name)` will resolve.
+    ///
+    /// The frame width and height are passed in rather than derived, because this
+    /// double has no image behind it and the tests that care about real geometry
+    /// use a real manager and a real window.
+    void declareAnimation(const std::string& name, const std::string& textureName, const std::uint32_t frameCount,
+                          const std::uint32_t speed, const int frameWidth, const int frameHeight)
+    {
+        m_animations.emplace(name, assets::Animation{textureName, frameCount, speed, frameWidth, frameHeight});
+    }
 
     [[nodiscard]] const std::vector<std::string>& requested() const noexcept { return m_requested; }
 
 private:
     mutable std::map<std::string, assets::Texture> m_textures;
     mutable std::map<std::string, assets::Font> m_fonts;
+
+    /// Animations are values, so this needs no `mutable` dance for the same reason
+    /// the textures do not: the map is only ever read.
+    std::map<std::string, assets::Animation> m_animations;
     mutable std::vector<std::string> m_requested;
 };
 

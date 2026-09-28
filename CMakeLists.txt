@@ -328,7 +328,8 @@ if(ENGINE_BUILD_TESTS)
     target_link_libraries(asset_manager_test PRIVATE engine_assets_sfml)
     target_compile_options(asset_manager_test PRIVATE ${ENGINE_WARNING_FLAGS})
     target_compile_definitions(asset_manager_test PRIVATE
-        ENGINE_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/AssetManager.hpp")
+        ENGINE_ASSET_MANAGER_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/AssetManager.hpp"
+        ENGINE_ANIMATION_HEADER="${PROJECT_SOURCE_DIR}/include/engine/assets/Animation.hpp")
     add_test(NAME assets.manager_interface COMMAND asset_manager_test)
     set_tests_properties(assets.manager_interface PROPERTIES TIMEOUT 60)
 

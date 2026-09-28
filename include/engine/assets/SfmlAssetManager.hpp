@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/AssetFile.hpp"
 #include "engine/assets/AssetManager.hpp"
 
 #include <cstddef>
@@ -108,6 +109,15 @@ public:
     /// @throws AssetNotFoundError if no font is declared under that name.
     [[nodiscard]] const Font& font(std::string_view name) const override;
 
+    /// The animation declared under `name`, validated against its texture.
+    ///
+    /// Unlike a texture or a font this loads no file: an animation names an image
+    /// another entry already loaded, and this records the frame geometry derived
+    /// from that image. The texture is not loaded a second time.
+    ///
+    /// @throws AssetNotFoundError if no animation is declared under that name.
+    [[nodiscard]] const Animation& animation(std::string_view name) const override;
+
     /// The platform texture behind `handle`, for verification and diagnostics.
     ///
     /// Drawing never goes through this: rendering goes through
@@ -137,14 +147,29 @@ public:
     /// Number of fonts loaded. Diagnostics only.
     [[nodiscard]] std::size_t fontCount() const noexcept { return m_fonts.size(); }
 
+    /// Number of animations loaded. Diagnostics only.
+    [[nodiscard]] std::size_t animationCount() const noexcept { return m_animations.size(); }
+
 private:
     /// Resolves `path` as written in the configuration against the directory the
     /// configuration lives in.
     [[nodiscard]] std::filesystem::path resolve(const std::string& path) const;
 
+    /// Builds one animation against the texture it names, which must already be
+    /// loaded because the parser only accepts an animation that follows its
+    /// texture.
+    ///
+    /// @throws AssetLoadError if the frame count does not divide the texture's
+    ///         width exactly, or names a texture that somehow is not loaded.
+    [[nodiscard]] Animation buildAnimation(const AssetEntry& entry) const;
+
     std::filesystem::path m_configurationPath;
     std::unordered_map<std::string, Texture> m_textures;
     std::unordered_map<std::string, Font> m_fonts;
+
+    /// The animations, stored as values. See [Animation](Animation.hpp) for why
+    /// this is not a map of handles: an animation owns no resource.
+    std::unordered_map<std::string, Animation> m_animations;
 };
 
 } // namespace engine::assets

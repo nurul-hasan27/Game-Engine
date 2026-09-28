@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/Animation.hpp"
 #include "engine/assets/Font.hpp"
 #include "engine/assets/Texture.hpp"
 
@@ -117,6 +118,26 @@ public:
     /// @param name The asset name from the configuration file. Compared exactly.
     /// @throws AssetNotFoundError if no font is declared under that name.
     [[nodiscard]] virtual const Font& font(std::string_view name) const = 0;
+
+    /// The animation declared under `name`.
+    ///
+    /// The same guarantees as [texture()](AssetManager.hpp): a stable reference
+    /// owned by the manager, the same object on every call with the same name.
+    ///
+    /// An animation is a **definition**, not a resource, so this returns a plain
+    /// immutable value rather than a handle: it owns no pixels, copies freely,
+    /// and contains no playback state. Two entities that look up the same name get
+    /// the same definition and keep their own frames - see
+    /// [Animation](Animation.hpp) for why that split matters.
+    ///
+    /// The texture it names is **not** returned with it. The animation records
+    /// which texture it slices; the caller asks for that texture by name when it
+    /// is ready to draw. That keeps one image loaded once, rather than a second
+    /// copy per animation that happens to use it.
+    ///
+    /// @param name The asset name from the configuration file. Compared exactly.
+    /// @throws AssetNotFoundError if no animation is declared under that name.
+    [[nodiscard]] virtual const Animation& animation(std::string_view name) const = 0;
 
 protected:
     /// Managers are created by their concrete implementation and held by

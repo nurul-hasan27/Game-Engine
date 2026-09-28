@@ -36,6 +36,7 @@ void check(const bool condition, const char* const expression, const char* const
 #define CHECK(...) check((__VA_ARGS__), #__VA_ARGS__, __FILE__, __LINE__)
 #define CHECK_FALSE(...) check(!(__VA_ARGS__), "!" #__VA_ARGS__, __FILE__, __LINE__)
 
+using engine::assets::Animation;
 using engine::assets::AssetManager;
 using engine::assets::AssetNotFoundError;
 using engine::assets::AssetParseError;
@@ -133,13 +134,18 @@ public:
     {
         if (m_destructionLog != nullptr)
         {
-            m_destructionLog->push_back(m_textureLookups + m_fontLookups);
+            m_destructionLog->push_back(m_textureLookups + m_fontLookups + m_animationLookups);
         }
     }
 
     void addTexture(std::string name) { m_textures.emplace(std::move(name), Texture{}); }
 
     void addFont(std::string name) { m_fonts.emplace(std::move(name), Font{}); }
+
+    void addAnimation(std::string name, const Animation& animation)
+    {
+        m_animations.emplace(std::move(name), animation);
+    }
 
     const Texture& texture(const std::string_view name) const override
     {
@@ -163,12 +169,25 @@ public:
         return found->second;
     }
 
+    const Animation& animation(const std::string_view name) const override
+    {
+        ++m_animationLookups;
+        const auto found = m_animations.find(std::string{name});
+        if (found == m_animations.end())
+        {
+            throw AssetNotFoundError{"no animation named '" + std::string{name} + "'"};
+        }
+        return found->second;
+    }
+
 private:
     std::map<std::string, Texture> m_textures;
     std::map<std::string, Font> m_fonts;
+    std::map<std::string, Animation> m_animations;
     std::vector<std::size_t>* m_destructionLog = nullptr;
     mutable std::size_t m_textureLookups = 0;
     mutable std::size_t m_fontLookups = 0;
+    mutable std::size_t m_animationLookups = 0;
 };
 
 /// Removes `//` comments and blank lines, leaving only code.
@@ -222,9 +241,8 @@ private:
     return count;
 }
 
-[[nodiscard]] std::string readInterfaceSource()
+[[nodiscard]] std::string readFile(const char* const path)
 {
-    const std::string path{ENGINE_ASSET_MANAGER_HEADER};
     std::ifstream file{path};
     if (!file)
     {
@@ -237,6 +255,8 @@ private:
     buffer << file.rdbuf();
     return buffer.str();
 }
+
+[[nodiscard]] std::string readInterfaceSource() { return readFile(ENGINE_ASSET_MANAGER_HEADER); }
 
 [[nodiscard]] std::string interfaceCode() { return stripComments(readInterfaceSource()); }
 
@@ -410,17 +430,32 @@ void testInterfaceHeaderIncludesOnlySfmlFreeEngineHeaders()
         return;
     }
 
-    // The two handle headers and the standard exception and string headers. The
-    // handles are the whole point: they are what make a return type possible
-    // without naming a graphics type.
+    // The three asset headers and the standard exception and string headers. The
+    // two handles are what make their return types possible without naming a
+    // graphics type; the animation is plain data and is included for the same
+    // reason, because it is a return type here too.
+    CHECK(code.find("#include \"engine/assets/Animation.hpp\"") != std::string::npos);
     CHECK(code.find("#include \"engine/assets/Font.hpp\"") != std::string::npos);
     CHECK(code.find("#include \"engine/assets/Texture.hpp\"") != std::string::npos);
     CHECK(code.find("#include <stdexcept>") != std::string::npos);
     CHECK(code.find("#include <string_view>") != std::string::npos);
 
-    // Exactly those four. A new dependency should have to be added here
+    // Exactly those five. A new dependency should have to be added here
     // deliberately, rather than arriving because something else needed it.
-    CHECK(countOccurrences(code, "#include") == 4U);
+    CHECK(countOccurrences(code, "#include") == 5U);
+
+    // The animation header must itself be free of graphics, since this header is
+    // now the reason it is reachable from a system that never sees SFML.
+    //
+    // Comments are stripped first, and that is not a nicety: the header's doc
+    // comment *names* `sf::IntRect` while explaining that the type is never
+    // exposed. Scanning the raw text would match its own explanation and fail,
+    // which is the false positive this file's `stripComments` exists to prevent.
+    const std::string animation = stripComments(readFile(ENGINE_ANIMATION_HEADER));
+    CHECK(!animation.empty());
+    CHECK(animation.find("sf::") == std::string::npos);
+    CHECK(animation.find("SFML") == std::string::npos);
+    CHECK(animation.find("#include") != std::string::npos);
 }
 
 void testInterfaceHeaderHasNoLoadingOrMutation()
@@ -433,13 +468,25 @@ void testInterfaceHeaderHasNoLoadingOrMutation()
         return;
     }
 
-    // The read-only promise, checked as a shape. A destructor and two lookups is
-    // the entire surface: three virtual declarations and two pure ones. Any new
+    // The read-only promise, checked as a shape. A destructor and three lookups is
+    // the entire surface: four virtual declarations and three pure ones. Any new
     // capability - a load, a reload, a clear, a setter - changes these counts and
     // fails here, which is the point. It is what stops a reload being added later
     // without anyone considering the dangling references it would cause.
-    CHECK(countOccurrences(code, "virtual") == 3U);
-    CHECK(countOccurrences(code, "= 0;") == 2U);
+    CHECK(countOccurrences(code, "virtual") == 4U);
+    CHECK(countOccurrences(code, "= 0;") == 3U);
+
+    // Spelled out, so a mutation that removes one of the three lookups is caught by
+    // name rather than only by a count that a compensating change could satisfy.
+    CHECK(code.find("virtual const Texture& texture(std::string_view name) const = 0;") != std::string::npos);
+    CHECK(code.find("virtual const Font& font(std::string_view name) const = 0;") != std::string::npos);
+    CHECK(code.find("virtual const Animation& animation(std::string_view name) const = 0;") != std::string::npos);
+
+    // The animation lookup must be const-qualified like the other two. A mutable
+    // animation lookup would be a way to write into the shared collection through
+    // a read-only interface.
+    CHECK(code.find("Animation& animation(std::string_view name) const = 0;") != std::string::npos);
+    CHECK(code.find("Animation& animation(std::string_view name) = 0;") == std::string::npos);
 
     // Spelled out as well, so the failure says which capability appeared rather
     // than just reporting a count.

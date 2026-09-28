@@ -2,8 +2,21 @@
 #
 # One asset per line, in the format the parser accepts:
 #
-#     Texture <name> <path>
-#     Font    <name> <path>
+#     Texture   <name> <path>
+#     Font      <name> <path>
+#     Animation <name> <textureName> <frameCount> <speed>
+#
+# An Animation names a texture rather than a file, so the texture it uses has to
+# be declared on an EARLIER line. Declaring it afterwards is a parse error, not
+# something resolved later.
+#
+# frameCount is how many equal columns the texture is cut into, and speed is how
+# many game frames pass between animation frames. Both must be positive.
+#
+# A frame count must divide the texture's width exactly. Frames are one row of
+# equal columns, so a width that is not a multiple of the frame count has no
+# honest way to be cut, and the loader refuses it rather than rounding. See the
+# note on megaman_megaRun below for the case that motivated that rule.
 #
 # Paths are relative to the directory containing this file, not to the
 # process working directory, so this configuration and the library it
@@ -51,6 +64,35 @@ Texture megaman_megaRun            library/images/megaman/megaRun.png
 Texture megaman_megaShot           library/images/megaman/megaShot.png
 Texture megaman_megaSlit           library/images/megaman/megaSlit.png
 Texture megaman_megaStand          library/images/megaman/megaStand.png
+
+# --- animations --------------------------------------------------
+#
+# Only the three genuinely multi-frame images in the library are declared here.
+# Every other image is a single frame, and a one-frame animation is legal but has
+# no consumer yet: nothing in the engine has a level file that names animations
+# per entity, so declaring thirteen of them would be declaring configuration
+# nothing reads.
+#
+# Each frame count below is the course reference's, and each was checked against
+# the committed image before being written down:
+#
+#   animations_explosion  1152 x 96   1152 / 12 = 96   exact
+#   mario_GoombaWalk       100 x 41   100 / 2 = 50    exact
+#   mario_GoombaDeath      60 x 26    60 / 2 = 30     exact
+#
+# megaman_megaRun is deliberately NOT declared, even though the course reference
+# declares it as 3 frames. It is 733 pixels wide, and 733 / 3 is 244.33, so the
+# frames do not line up. Measured against the actual artwork, its three run
+# sprites are 191, 129 and 167 pixels wide, separated by wide transparent
+# margins, so a truncating slice would not visibly clip anything - it would place
+# each sprite 2 to 6 pixels off the centre it claims, and silently discard the
+# final column because 3 x 244 is 732 and not 733. That is a real
+# misregistration, so this engine refuses it instead. Re-authoring the strip to a
+# width that divides evenly, or adding a frame-offset field to the format, would
+# both fix it honestly; rounding the division would not.
+Animation animations_explosion_burst   animations_explosion   12  8
+Animation mario_GoombaWalk_walk        mario_GoombaWalk      2  8
+Animation mario_GoombaDeath_flat       mario_GoombaDeath     2  6
 
 # --- fonts -------------------------------------------------------
 Font fonts_numbers              library/fonts/numbers.ttf

@@ -41,9 +41,27 @@ void check(const bool condition, const char* const expression, const char* const
     }
 }
 
+void checkEqual(const std::string& actual, const std::string& expected, const char* const expression,
+                const char* const file, const int line)
+{
+    if (actual != expected)
+    {
+        ++g_failureCount;
+        std::cerr << "    " << file << ':' << line << ": CHECK(" << expression << ") failed"
+                  << "\n      actual   = \"" << actual << "\"\n      expected = \"" << expected << "\"\n";
+    }
+}
+
 #define CHECK(...) check((__VA_ARGS__), #__VA_ARGS__, __FILE__, __LINE__)
 #define CHECK_FALSE(...) check(!(__VA_ARGS__), "!" #__VA_ARGS__, __FILE__, __LINE__)
 
+/// For the cases where a failure has to say *what* it got, not merely that
+/// something was false. A configuration or a load error's message is the user
+/// interface, so asserting on it exactly is asserting on the contract.
+#define CHECK_STR(actual, expected) checkEqual((actual), (expected), #actual " == " #expected, __FILE__, __LINE__)
+
+using engine::assets::Animation;
+using engine::IntRect;
 using engine::assets::AssetLoadError;
 using engine::assets::AssetManager;
 using engine::assets::AssetNotFoundError;
@@ -230,6 +248,557 @@ private:
 }
 
 // ---------------------------------------------------------------------------
+// Animations
+//
+// An animation loads no file. It names a texture that some earlier entry already
+// loaded, and these groups cover what the loader does with that: the frame
+// geometry it derives, the fact that the image is not loaded twice, the
+// divisibility rule, and the fact that a definition carries no playback state.
+// ---------------------------------------------------------------------------
+
+/// A configuration declaring one texture, plus an animation over it, written into
+/// `directory` with the paths resolved the way a user's file would be.
+[[nodiscard]] fs::path writeTextureAndAnimation(const TemporaryDirectory& directory, const std::string& textureName,
+                                                 const std::string& libraryRelative, const std::string& animationName,
+                                                 const std::string& frames, const std::string& speed)
+{
+    return directory.write("assets.txt", "Texture " + textureName + " " +
+                                               entryFor(directory.path(), libraryRelative) + "\nAnimation " +
+                                               animationName + " " + textureName + " " + frames + " " + speed + "\n");
+}
+
+void testAnimationLoadsFromAnExistingTexture()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    CHECK(manager.animationCount() == 1U);
+    CHECK(manager.textureCount() == 1U);
+
+    const Animation& animation = manager.animation("walk");
+    CHECK_STR(animation.textureName(), "goomba");
+    CHECK(animation.frameCount() == 2U);
+    CHECK(animation.speed() == 8U);
+}
+
+void testAnimationResolvesItsFrameGeometryFromTheImage()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "burst", "images/animations/explosion.png", "blast",
+                                                     "12", "8");
+
+    const SfmlAssetManager manager{config};
+
+    // 1152 / 12. The frame width is not stored in the configuration and not
+    // invented by the loader: it is the real image width divided by the declared
+    // frame count, so this is a check that the right file was opened.
+    const Animation& animation = manager.animation("blast");
+    CHECK(animation.frameWidth() == 96);
+    CHECK(animation.frameHeight() == 96);
+}
+
+void testAnimationFrameHeightIsTheWholeImageHeight()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    // Frames are one row, so every frame is as tall as the image. GoombaWalk is
+    // 100x41, so the two frames are 50x41 and not 50x50.
+    const Animation& animation = manager.animation("walk");
+    CHECK(animation.frameHeight() == 41);
+}
+
+void testAnimationDoesNotLoadItsTextureTwice()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    // One texture entry means one loaded texture no matter how many animations
+    // name it. A second load would be a second copy of the pixels on the GPU for
+    // no reason, and the count is the only externally visible way to see it.
+    CHECK(manager.textureCount() == 1U);
+    CHECK(manager.animationCount() == 1U);
+}
+
+void testSeveralAnimationsShareOneLoadedTexture()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = directory.write("assets.txt",
+                                            "Texture burst " + entryFor(directory.path(), "images/animations/explosion.png") +
+                                                "\nAnimation blast burst 12 8\nAnimation shimmer burst 6 4\nAnimation "
+                                                "flicker burst 3 2\n");
+
+    const SfmlAssetManager manager{config};
+
+    CHECK(manager.textureCount() == 1U);
+    CHECK(manager.animationCount() == 3U);
+
+    // Same texture, three different definitions over it. Each resolves its own
+    // frame width from the same image.
+    CHECK(manager.animation("blast").frameWidth() == 96);
+    CHECK(manager.animation("shimmer").frameWidth() == 192);
+    CHECK(manager.animation("flicker").frameWidth() == 384);
+}
+
+void testAnimationRepeatedLookupsReturnTheSameDefinition()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    // Address equality, for the same reason textures assert it: one shared
+    // definition, so nothing can drift between two observers of the same name.
+    CHECK(&manager.animation("walk") == &manager.animation("walk"));
+}
+
+void testAnimationLookupNamesTheAssetItCouldNotFind()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    std::string message;
+    try
+    {
+        (void)manager.animation("run");
+    }
+    catch (const AssetNotFoundError& error)
+    {
+        message = error.what();
+    }
+
+    CHECK_STR(message, "no animation named 'run'");
+}
+
+void testAnimationLookupIsSeparateFromTextureAndFontLookup()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    // Names are unique across the whole file, so each name reaches exactly one
+    // kind. Asking the wrong kind for it is a mistake worth a loud failure rather
+    // than a quiet miss.
+    std::string asTexture;
+    std::string asFont;
+    try
+    {
+        (void)manager.texture("walk");
+    }
+    catch (const AssetNotFoundError& error)
+    {
+        asTexture = error.what();
+    }
+    try
+    {
+        (void)manager.font("walk");
+    }
+    catch (const AssetNotFoundError& error)
+    {
+        asFont = error.what();
+    }
+
+    CHECK_STR(asTexture, "no texture named 'walk'");
+    CHECK_STR(asFont, "no font named 'walk'");
+}
+
+void testAnimationReferencingATextureNameIsFound()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    // The animation records the texture's *name*, and following it reaches the
+    // same loaded image. This is the path a renderer takes: resolve the
+    // animation, ask for its texture by name, draw a region of it.
+    const Animation& animation = manager.animation("walk");
+    const sf::Texture& image = manager.nativeTexture(manager.texture(animation.textureName()));
+    CHECK(image.getSize() == sf::Vector2u{100U, 41U});
+}
+
+void testAnimationFrameRectanglesTileTheTextureExactly()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("walk");
+
+    // The frames must tile the image with no gaps and no overlap, and the last one
+    // must end exactly at its right edge. A layout that merely summed to the
+    // width could still have a seam or an overhang.
+    int expectedLeft = 0;
+    for (std::uint32_t frame = 0U; frame < animation.frameCount(); ++frame)
+    {
+        const IntRect rect = animation.frameRect(frame);
+        CHECK(rect.left == expectedLeft);
+        CHECK(rect.top == 0);
+        CHECK(rect.width == 50);
+        CHECK(rect.height == 41);
+        expectedLeft = rect.left + rect.width;
+    }
+    CHECK(expectedLeft == 100);
+}
+
+void testAnimationFrameRectanglesAreDistinct()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "burst", "images/animations/explosion.png", "blast",
+                                                     "12", "8");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("blast");
+
+    // Every frame must select a different region, or an animation would show the
+    // same picture for several steps. Compared by value, so it holds regardless
+    // of how the rect is represented.
+    for (std::uint32_t frame = 1U; frame < animation.frameCount(); ++frame)
+    {
+        CHECK(animation.frameRect(frame) != animation.frameRect(frame - 1U));
+    }
+}
+
+void testAnimationWithOneFrameCoversTheWholeTexture()
+{
+    const TemporaryDirectory directory;
+    // ground.png is 64x64, so one frame is the whole image. The course's level
+    // format makes every entity name an animation, including ones that never
+    // change, so this is a normal configuration rather than a degenerate one.
+    const fs::path config = writeTextureAndAnimation(directory, "brick", "images/mario/ground.png", "still", "1", "1");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("still");
+
+    CHECK(animation.frameCount() == 1U);
+    CHECK(animation.frameWidth() == 64);
+    CHECK(animation.frameHeight() == 64);
+    CHECK(animation.frameRect(0U) == (IntRect{0, 0, 64, 64}));
+}
+
+void testAnimationCarriesNoPlaybackState()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("walk");
+
+    // Every lookup returns the same definition and the same values, so no
+    // observable state on the asset changes. If a current frame or a repeat flag
+    // lived here, two entities sharing this animation could not be on different
+    // frames, and this loop would be the place it showed.
+    for (int repeat = 0; repeat < 8; ++repeat)
+    {
+        CHECK(manager.animation("walk").frameCount() == 2U);
+        CHECK(manager.animation("walk").speed() == 8U);
+        CHECK(manager.animation("walk").frameRect(1U) == animation.frameRect(1U));
+        CHECK(manager.animation("walk").textureName() == "goomba");
+    }
+}
+
+void testAnimationIsCopyableAndStillImmutable()
+{
+    // An animation owns nothing, so it copies - unlike a texture handle. The copy
+    // is a value with no shared mutable state, which is what makes it safe for a
+    // component to hold the same definition the manager does.
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+    const Animation copy = manager.animation("walk");
+
+    CHECK(copy.textureName() == "goomba");
+    CHECK(copy.frameCount() == 2U);
+    CHECK(copy.speed() == 8U);
+    CHECK(copy.frameWidth() == 50);
+    CHECK(copy.frameRect(0U) == (IntRect{0, 0, 50, 41}));
+
+    static_assert(std::is_copy_constructible_v<Animation>,
+                  "an animation owns no resource, so it must be copyable");
+    static_assert(std::is_copy_assignable_v<Animation>, "an animation must be copy assignable");
+}
+
+void testAnimationHasNoSetters()
+{
+    // The asset is immutable after loading, and the type says so: there is no way
+    // to change a frame count, a speed or a name. A setter here would let one
+    // entity's playback rewrite the definition every other entity shares.
+    //
+    // What is checkable at runtime is the consequence: mutating a copy leaves the
+    // manager's own object untouched, because the manager hands out a const
+    // reference and a copy is a separate value.
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("walk");
+
+    // Assignment through the const reference the manager hands out does not
+    // compile, which is the guarantee. What is observable here is that the object
+    // the manager owns is still the same one afterwards.
+    Animation mutableCopy = animation;
+    mutableCopy = Animation{"other", 9U, 9U, 1, 1};
+    CHECK(mutableCopy.frameCount() == 9U);
+    CHECK(manager.animation("walk").frameCount() == 2U);
+    CHECK(&manager.animation("walk") != &mutableCopy);
+}
+
+void testAnimationFrameCountThatDoesNotDivideTheWidthIsRejected()
+{
+    const TemporaryDirectory directory;
+    // GoombaWalk is 100 pixels wide and 3 does not divide 100. This is the rule
+    // the shipped configuration documents by omitting megaman_megaRun.
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "3",
+                                                     "8");
+
+    std::string message;
+    try
+    {
+        const SfmlAssetManager manager{config};
+        (void)manager;
+    }
+    catch (const AssetLoadError& error)
+    {
+        message = error.what();
+    }
+
+    CHECK_STR(message, "animation 'walk' declares 3 frames of texture 'goomba', but that texture is 100 pixels wide "
+                       "and 1 is left over; a frame count must divide the texture width exactly");
+}
+
+void testTheRealNonDivisibleCaseIsRejected()
+{
+    const TemporaryDirectory directory;
+    // The actual case from the course's own reference configuration: megaRun is
+    // 733 pixels wide and the reference declares 3 frames. This group exists so
+    // that if the divisibility rule is ever removed, the case that motivated it
+    // is the one that catches it.
+    const fs::path config = writeTextureAndAnimation(directory, "run", "images/megaman/megaRun.png", "run_cycle", "3",
+                                                     "8");
+
+    std::string message;
+    try
+    {
+        const SfmlAssetManager manager{config};
+        (void)manager;
+    }
+    catch (const AssetLoadError& error)
+    {
+        message = error.what();
+    }
+
+    CHECK_STR(message, "animation 'run_cycle' declares 3 frames of texture 'run', but that texture is 733 pixels wide "
+                       "and 1 is left over; a frame count must divide the texture width exactly");
+}
+
+void testAnimationFrameCountDividingTheWidthIsAccepted()
+{
+    const TemporaryDirectory directory;
+    // 733 is prime-ish and awkward, which makes it a good control: the rule is
+    // about divisibility, not about the image being a round number. 733 = 733 * 1
+    // and 733 / 733 = 1, so one frame is always legal.
+    const fs::path config = writeTextureAndAnimation(directory, "run", "images/megaman/megaRun.png", "whole", "733",
+                                                     "1");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("whole");
+
+    CHECK(animation.frameCount() == 733U);
+    CHECK(animation.frameWidth() == 1);
+    CHECK(animation.frameHeight() == 246);
+}
+
+void testAnimationFrameCountWiderThanTheTextureIsRejected()
+{
+    const TemporaryDirectory directory;
+    // ground.png is 64 pixels wide; 65 frames cannot fit even with a remainder of
+    // one, and this is the same rule from the other direction.
+    const fs::path config = writeTextureAndAnimation(directory, "brick", "images/mario/ground.png", "crowded", "65",
+                                                     "1");
+
+    std::string message;
+    try
+    {
+        const SfmlAssetManager manager{config};
+        (void)manager;
+    }
+    catch (const AssetLoadError& error)
+    {
+        message = error.what();
+    }
+
+    CHECK_STR(message, "animation 'crowded' declares 65 frames of texture 'brick', but that texture is 64 pixels wide "
+                       "and 64 is left over; a frame count must divide the texture width exactly");
+}
+
+void testAnimationFrameCountEqualToTheWidthIsOnePixelFrames()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "brick", "images/mario/ground.png", "stripes", "64",
+                                                     "1");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("stripes");
+
+    // The boundary case of the rule: the largest legal frame count for this image.
+    // It is legal but produces 1-pixel columns, which is exactly why the rule is
+    // about divisibility and not about whether the result looks sensible.
+    CHECK(animation.frameWidth() == 1);
+    CHECK(animation.isValidFrame(63U));
+    CHECK_FALSE(animation.isValidFrame(64U));
+}
+
+void testAnimationFailingDivisibilityDoesNotPartiallyLoad()
+{
+    const TemporaryDirectory directory;
+    // A good texture, then a bad animation. The whole constructor throws, so
+    // nothing is handed back half-built - there is no manager to inspect, which is
+    // the observable form of "a partially loaded manager is never returned".
+    const fs::path config = directory.write("assets.txt",
+                                            "Texture ground " + entryFor(directory.path(), "images/mario/ground.png") +
+                                                "\nFont pixeled " + entryFor(directory.path(), "fonts/pixeled.ttf") +
+                                                "\nTexture goomba " + entryFor(directory.path(), "images/mario/GoombaWalk.png") +
+                                                "\nAnimation walk goomba 3 8\n");
+
+    bool threw = false;
+    try
+    {
+        const SfmlAssetManager manager{config};
+        (void)manager;
+    }
+    catch (const AssetLoadError&)
+    {
+        threw = true;
+    }
+
+    CHECK(threw);
+}
+
+void testAnimationOverAnIndexedPngLoads()
+{
+    const TemporaryDirectory directory;
+    // explosion.png is palette-indexed, which is the one image format in the
+    // library that a decoder could plausibly get wrong. An animation over it must
+    // behave exactly as one over an RGBA image.
+    const fs::path config = writeTextureAndAnimation(directory, "burst", "images/animations/explosion.png", "blast",
+                                                     "12", "8");
+
+    const SfmlAssetManager manager{config};
+
+    CHECK(manager.animation("blast").frameWidth() == 96);
+    CHECK(manager.nativeTexture(manager.texture("burst")).getSize() == sf::Vector2u{1152U, 96U});
+}
+
+void testAnimationLoadsWithNoFontsAndNoOtherTextures()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+
+    CHECK(manager.fontCount() == 0U);
+    CHECK(manager.textureCount() == 1U);
+    CHECK(manager.animationCount() == 1U);
+}
+
+void testAnimationDoesNotAffectTextureOrFontLoading()
+{
+    const TemporaryDirectory directory;
+    // A file where an animation sits between two textures and a font. Every kind
+    // must still resolve to its own resource, so the shared loading loop did not
+    // start dispatching on the wrong branch.
+    const fs::path config = directory.write("assets.txt",
+                                            "Texture stand " + entryFor(directory.path(), "images/megaman/megaStand.png") +
+                                                "\nAnimation stand_idle stand 1 1\nFont pixeled " +
+                                                entryFor(directory.path(), "fonts/pixeled.ttf") +
+                                                "\nTexture goomba " + entryFor(directory.path(), "images/mario/GoombaWalk.png") +
+                                                "\nAnimation walk goomba 2 8\n");
+
+    const SfmlAssetManager manager{config};
+
+    CHECK(manager.nativeTexture(manager.texture("stand")).getSize() == sf::Vector2u{190U, 208U});
+    CHECK(!manager.nativeFont(manager.font("pixeled")).getInfo().family.empty());
+    CHECK(manager.nativeTexture(manager.texture("goomba")).getSize() == sf::Vector2u{100U, 41U});
+    CHECK(manager.animation("stand_idle").frameWidth() == 190);
+    CHECK(manager.animation("walk").frameWidth() == 50);
+    CHECK(manager.textureCount() == 2U);
+    CHECK(manager.fontCount() == 1U);
+    CHECK(manager.animationCount() == 2U);
+}
+
+void testEmptyAnimationIsHonestRatherThanUsable()
+{
+    // A default-constructed animation is a real state: something a manager has not
+    // loaded has to be able to hand back. It must not claim any frames, because an
+    // animation with frames and no texture would draw the wrong thing.
+    const Animation empty;
+
+    CHECK(empty.textureName().empty());
+    CHECK(empty.frameCount() == 0U);
+    CHECK(empty.speed() == 0U);
+    CHECK(empty.frameWidth() == 0);
+    CHECK(empty.frameHeight() == 0);
+    CHECK_FALSE(empty.isValidFrame(0U));
+    CHECK(isEmpty(empty.frameRect(0U)));
+}
+
+void testAnimationOutOfRangeFrameYieldsAnEmptyRect()
+{
+    // frameRect's precondition is isValidFrame, and breaking it must produce
+    // nothing to draw rather than a region pointing outside the image. Drawing
+    // outside a texture is undefined behaviour in most graphics libraries, so the
+    // safe answer is an empty region.
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager manager{config};
+    const Animation& animation = manager.animation("walk");
+
+    CHECK(isEmpty(animation.frameRect(2U)));
+    CHECK(isEmpty(animation.frameRect(99U)));
+    CHECK(isEmpty(animation.frameRect(4294967295U)));
+}
+
+void testTwoManagersLoadAnimationsIndependently()
+{
+    const TemporaryDirectory directory;
+    const fs::path config = writeTextureAndAnimation(directory, "goomba", "images/mario/GoombaWalk.png", "walk", "2",
+                                                     "8");
+
+    const SfmlAssetManager first{config};
+    const SfmlAssetManager second{config};
+
+    // Same definition, two managers, two objects. Sharing a definition across
+    // managers would mean one outliving the other, which is the whole lifetime
+    // rule the interface exists to keep.
+    CHECK(&first.animation("walk") != &second.animation("walk"));
+    CHECK(first.animation("walk").frameRect(1U) == second.animation("walk").frameRect(1U));
+}
+
+// ---------------------------------------------------------------------------
 // The shipped configuration
 // ---------------------------------------------------------------------------
 
@@ -264,7 +833,14 @@ private:
     std::vector<fs::path> paths;
     for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
     {
-        paths.push_back(base / entry.path);
+        // An animation has no path: it names a texture, and that texture's own
+        // entry is the one with a file. Including it here would resolve the empty
+        // string to the configuration's own directory, which is a directory and
+        // would "open" successfully while testing nothing.
+        if (entry.type != engine::assets::AssetType::Animation)
+        {
+            paths.push_back(base / entry.path);
+        }
     }
     return paths;
 }
@@ -860,9 +1436,23 @@ void testTheManagerHeaderOffersNoMutation()
     // without one would be a way to create a manager holding nothing.
     CHECK(countOccurrences(code, "explicit SfmlAssetManager(") == 1U);
 
-    // And the two diagnostics accessors are the only extra public surface.
+    // And the three diagnostics accessors and the animation lookup are the only
+    // extra public surface. `buildAnimation` is named here because it is the one
+    // member that does real work at construction time, and a second one appearing
+    // next to it would be a new place a failure could be raised from.
     CHECK(countOccurrences(code, "nativeTexture(") == 1U);
     CHECK(countOccurrences(code, "nativeFont(") == 1U);
+    CHECK(countOccurrences(code, "buildAnimation(") == 1U);
+
+    // The animation lookup is const-qualified and returns a reference, exactly
+    // like the other two. A by-value or mutable lookup would break the read-only
+    // promise in a way the forbidden-word list above cannot see.
+    CHECK(code.find("const Animation& animation(std::string_view name) const override") != std::string::npos);
+    CHECK(code.find("Animation& animation(std::string_view name) = override") == std::string::npos);
+
+    // The animation collection is private, so nothing outside the manager can
+    // reach into it. Two occurrences: the declaration and the constructor's use.
+    CHECK(countOccurrences(code, "m_animations") == 2U);
 }
 
 void testTwoManagersLoadIndependently()
@@ -1060,7 +1650,7 @@ void testTheShippedConfigurationParses()
     // reject is worthless, so this is the only version of the check that matters.
     const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
 
-    CHECK(entries.size() == 27U);
+    CHECK(entries.size() == 30U);
 }
 
 void testTheShippedConfigurationHasTheExpectedEntryCounts()
@@ -1069,30 +1659,40 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
 
     std::size_t textures = 0;
     std::size_t fonts = 0;
+    std::size_t animations = 0;
     for (const engine::assets::AssetEntry& entry : entries)
     {
         if (entry.type == engine::assets::AssetType::Texture)
         {
             ++textures;
         }
-        else
+        else if (entry.type == engine::assets::AssetType::Font)
         {
             ++fonts;
         }
+        else
+        {
+            ++animations;
+        }
     }
 
-    // 24 images and 3 fonts, which is the whole committed library. The group below
-    // derives the same numbers from the library itself, so this one is the
-    // statement of intent rather than a second guess at the same fact.
+    // 24 images, 3 fonts and 3 animations. The images and fonts are the whole
+    // committed library; the animations are the three multi-frame strips in it.
+    // The group below derives the texture and font numbers from the library
+    // itself, so this one is the statement of intent rather than a second guess
+    // at the same fact.
     CHECK(textures == 24U);
     CHECK(fonts == 3U);
-    CHECK(textures + fonts == 27U);
+    CHECK(animations == 3U);
+    CHECK(textures + fonts + animations == 30U);
 }
 
 void testEveryConfiguredPathExists()
 {
     const std::vector<fs::path> paths = resolvedShippedPaths();
 
+    // One path per texture and per font. The three animations contribute none,
+    // which is the point of them naming a texture rather than a file.
     CHECK(paths.size() == 27U);
 
     for (const fs::path& path : paths)
@@ -1143,7 +1743,12 @@ void testTheShippedConfigurationNamesEveryLibraryFile()
     std::vector<std::string> declared;
     for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
     {
-        declared.push_back(entry.path);
+        // An animation names no file, so it is not part of the file-to-declaration
+        // cross-check. Its texture is, by way of that texture's own entry.
+        if (entry.type != engine::assets::AssetType::Animation)
+        {
+            declared.push_back(entry.path);
+        }
     }
     std::sort(declared.begin(), declared.end());
 
@@ -1169,11 +1774,12 @@ void testEveryConfiguredAssetLoadsThroughTheManager()
     // The end-to-end statement: the shipped configuration, loaded by the real
     // loader, resolves every name to a real resource. Constructing the manager
     // already throws if any file will not load, so reaching the checks below means
-    // all 27 loaded.
+    // all 30 entries were accepted.
     const SfmlAssetManager manager{shippedConfiguration()};
 
     CHECK(manager.textureCount() == 24U);
     CHECK(manager.fontCount() == 3U);
+    CHECK(manager.animationCount() == 3U);
 
     for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
     {
@@ -1186,12 +1792,24 @@ void testEveryConfiguredAssetLoadsThroughTheManager()
                 CHECK(false);
             }
         }
-        else
+        else if (entry.type == engine::assets::AssetType::Font)
         {
             const sf::Font& font = manager.nativeFont(manager.font(entry.name));
             if (font.getInfo().family.empty())
             {
                 std::cerr << "    configured font did not parse: " << entry.name << '\n';
+                CHECK(false);
+            }
+        }
+        else
+        {
+            // An animation resolves to a definition, and the only thing that can be
+            // wrong with it in a way this loader can see is a frame that does not
+            // exist or a frame size of zero. Both would already have thrown.
+            const Animation& animation = manager.animation(entry.name);
+            if (!animation.isValidFrame(0U) || animation.frameWidth() <= 0 || animation.frameHeight() <= 0)
+            {
+                std::cerr << "    configured animation has no usable frame: " << entry.name << '\n';
                 CHECK(false);
             }
         }
@@ -1257,6 +1875,33 @@ int main()
         {"malformed configuration keeps the parser's diagnosis", &testMalformedConfigurationKeepsTheParsersDiagnosis},
         {"missing configuration file is reported", &testMissingConfigurationFileIsReported},
         {"an empty handle has no platform resource", &testAnEmptyHandleHasNoPlatformResource},
+        {"an animation loads from an existing texture", &testAnimationLoadsFromAnExistingTexture},
+        {"an animation resolves its frame geometry from the image", &testAnimationResolvesItsFrameGeometryFromTheImage},
+        {"an animation frame height is the whole image height", &testAnimationFrameHeightIsTheWholeImageHeight},
+        {"an animation does not load its texture twice", &testAnimationDoesNotLoadItsTextureTwice},
+        {"several animations share one loaded texture", &testSeveralAnimationsShareOneLoadedTexture},
+        {"an animation repeated lookup returns the same definition", &testAnimationRepeatedLookupsReturnTheSameDefinition},
+        {"an animation lookup names the asset it could not find", &testAnimationLookupNamesTheAssetItCouldNotFind},
+        {"an animation lookup is separate from texture and font lookup", &testAnimationLookupIsSeparateFromTextureAndFontLookup},
+        {"an animation referencing a texture name is found", &testAnimationReferencingATextureNameIsFound},
+        {"animation frame rectangles tile the texture exactly", &testAnimationFrameRectanglesTileTheTextureExactly},
+        {"animation frame rectangles are distinct", &testAnimationFrameRectanglesAreDistinct},
+        {"an animation with one frame covers the whole texture", &testAnimationWithOneFrameCoversTheWholeTexture},
+        {"an animation carries no playback state", &testAnimationCarriesNoPlaybackState},
+        {"an animation is copyable and the manager's is still immutable", &testAnimationIsCopyableAndStillImmutable},
+        {"an animation has no setters", &testAnimationHasNoSetters},
+        {"a frame count that does not divide the width is rejected", &testAnimationFrameCountThatDoesNotDivideTheWidthIsRejected},
+        {"the real non divisible case is rejected", &testTheRealNonDivisibleCaseIsRejected},
+        {"a frame count dividing the width is accepted", &testAnimationFrameCountDividingTheWidthIsAccepted},
+        {"a frame count wider than the texture is rejected", &testAnimationFrameCountWiderThanTheTextureIsRejected},
+        {"a frame count equal to the width gives one pixel frames", &testAnimationFrameCountEqualToTheWidthIsOnePixelFrames},
+        {"a failing divisibility check does not partially load", &testAnimationFailingDivisibilityDoesNotPartiallyLoad},
+        {"an animation over an indexed png loads", &testAnimationOverAnIndexedPngLoads},
+        {"an animation loads with no fonts and no other textures", &testAnimationLoadsWithNoFontsAndNoOtherTextures},
+        {"an animation does not affect texture or font loading", &testAnimationDoesNotAffectTextureOrFontLoading},
+        {"an empty animation is honest rather than usable", &testEmptyAnimationIsHonestRatherThanUsable},
+        {"an out of range frame yields an empty rect", &testAnimationOutOfRangeFrameYieldsAnEmptyRect},
+        {"two managers load animations independently", &testTwoManagersLoadAnimationsIndependently},
         {"the manager header offers no mutation", &testTheManagerHeaderOffersNoMutation},
         {"two managers load independently", &testTwoManagersLoadIndependently},
         {"a loaded handle cannot be moved out of the manager", &testALoadedHandleCannotBeMovedOutOfTheManager},
