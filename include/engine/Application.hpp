@@ -9,12 +9,15 @@
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/ActionState.hpp"
 #include "engine/input/Input.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/systems/RenderSystem.hpp"
 
 #include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/Window/Event.hpp>
 
 #include <cstddef>
+#include <functional>
+#include <memory>
 #include <optional>
 
 namespace engine
@@ -91,6 +94,59 @@ namespace engine
 ///
 /// ### The frame
 ///
+/// The frame has two shapes, and which one runs depends on one question: is a
+/// scene active?
+///
+/// **With a scene.** A scene owns a world and the systems that run in it, so
+/// `Application` does not have a world to update and does not know what
+/// `update`/`render` mean for a menu. It hands the frame to the scene:
+///
+/// ```text
+/// input.beginFrame()                 clear pressed/released, keep held state
+/// processEvents()                    window close, and keyboard into Input
+/// update():
+///   time.tick()                      measure the frame that just happened
+///   actions.update(actionMap, input)  one coherent snapshot, built once
+///   applyPendingTransition()         THE FRAME BOUNDARY - see below
+///   scene->update(actions, delta)    the scene's world, its systems
+/// render():
+///   renderer.beginFrame() / clear()
+///   scene->render()                  the scene's world -> draws
+///   renderer.endFrame()
+/// ```
+///
+/// **Without a scene.** `Application` drives its own `entityManager()` and
+/// `systemManager()` instead, exactly as it did before scenes existed. That is
+/// what several tests do, and it is a real supported mode rather than a
+/// leftover: a tool or a test can build a world without a game.
+///
+/// ### The frame boundary, and why a transition is deferred
+///
+/// A scene cannot replace itself. It records what it wants - `SceneTransition::to`,
+/// `stay` or `quitApplication` - and `applyPendingTransition()` acts on it at the
+/// start of the next frame, before the new scene is built and before any of the
+/// outgoing scene's systems run again.
+///
+/// Both orderings matter, and they are the reason for the deferral:
+///
+/// - **Before any of the old scene's systems run again**, so a scene is never
+///   destroyed while one of its own systems is still executing. `update()` calls
+///   `applyPendingTransition()` *before* `scene->update()`, never inside it, so
+///   the worst case is a scene that finishes a frame it is about to lose.
+/// - **Destroy old before building new**, so two scenes never coexist and a
+///   constructor that throws leaves no scene rather than a stale one.
+///
+/// The visible consequence is that a transition takes effect on the *next* frame,
+/// so every frame belongs entirely to one scene - never updated by the old one and
+/// drawn by the new one. That is stronger than the requirement and it is free:
+/// nothing outside the loop can observe a half-transition frame, because a frame
+/// is the unit the loop publishes.
+///
+/// A `quit` request is applied here too, and it skips the rest of the frame: the
+/// scene that asked has finished updating, so there is nothing left worth drawing.
+///
+/// ### The frame, without a scene
+///
 /// ```text
 /// input.beginFrame()                 clear pressed/released, keep held state
 /// processEvents()                    window close, and keyboard into Input
@@ -120,6 +176,14 @@ namespace engine
 /// order is update order and the camera should follow where the target ended up
 /// this frame.
 ///
+/// That decision is unchanged by scenes, and it is worth being explicit about
+/// because a scene looks like it might be the place where the engine starts
+/// registering systems. It is not. A scene *registers* systems for *its own*
+/// world - [engine::scene::PlayScene] registers four - but the engine still
+/// registers none of its own, and a scene is told what to register by nothing more
+/// than its own constructor. The distinction is who decides: a scene decides
+/// because it is the game, and `Application` does not decide at all.
+///
 /// The camera is written during simulation and read during rendering. That is
 /// the whole of its involvement in the frame: it changes what you see, never
 /// what is simulated.
@@ -136,6 +200,19 @@ namespace engine
 /// pass. Folding it into the simulation list would mean either clearing mid
 /// simulation or presenting before the last system ran. This is recorded in
 /// [docs/rendering.md](docs/rendering.md).
+/// Builds a scene from the shared infrastructure.
+///
+/// The default is [engine::scene::makeScene]. It is a type rather than a hard call
+/// so that a test can hand `Application` a scene it can watch being destroyed,
+/// which is the only way to observe that a transition really releases the old one
+/// rather than merely forgetting it. This is the same dependency inversion the
+/// rest of the engine already uses - a system is handed a `graphics::Renderer&`,
+/// [engine::level::LevelLoader] is handed an `assets::AssetManager&`, and both
+/// have test fakes - applied to scene construction, which is the one piece of
+/// `Application`'s work that is otherwise unreachable from a test.
+using SceneFactory =
+    std::function<std::unique_ptr<scene::Scene>(scene::SceneId, const scene::SceneContext&)>;
+
 class Application
 {
 public:
@@ -208,10 +285,71 @@ public:
     /// invalidate the references other systems are holding.
     [[nodiscard]] const assets::AssetManager& assets() const noexcept { return m_assets; }
 
+    /// Asks for `id` to become the active scene.
+    ///
+    /// ### Deferred, always
+    ///
+    /// The request is recorded, not performed, and is applied by
+    /// [applyPendingTransition] at the start of the next frame - so the scene that
+    /// is active during the current frame finishes its update and its render first.
+    /// There is no "apply it now" path, because a scene asking to be replaced from
+    /// inside its own update is the case that has to be safe, and one rule that is
+    /// always deferred has no case where it is not.
+    ///
+    /// A call made before the first frame therefore takes effect at the start of
+    /// that frame, which is what `main` relies on: it asks for the menu and then
+    /// runs, and the first frame is already the menu's.
+    ///
+    /// Building the new scene runs the new scene's constructor, which for
+    /// [scene::PlayScene] reads the level. A level that fails to load throws out of
+    /// this method *and* out of the next [update], with the old scene already gone:
+    /// a transition that failed is not a transition that was rolled back.
+    void changeScene(const scene::SceneId id);
+
+    /// Which scene is active, or `nullopt` if no scene is driving the frame.
+    ///
+    /// `nullopt` is a real state, not an error: an `Application` with no scene
+    /// drives its own [entityManager] and [systemManager] instead, which is how
+    /// this engine was used before scenes existed and is still how several tests
+    /// build a world without a window-level game.
+    [[nodiscard]] std::optional<scene::SceneId> sceneId() const noexcept;
+
+    /// The active scene, or `nullptr` if there is none.
+    ///
+    /// A borrowed pointer into the owned scene, valid until the next transition or
+    /// until this `Application` is destroyed. Held for tests and diagnostics; the
+    /// frame is driven through [update] and [render] rather than through this.
+    [[nodiscard]] const scene::Scene* currentScene() const noexcept;
+
+    /// Replaces the factory used to build scenes. For tests.
+    ///
+    /// The default is [engine::scene::makeScene]. Replacing it does not rebuild the
+    /// current scene: a scene already active stays until a transition asks for
+    /// another one, because swapping the builder under a live scene would change
+    /// what "the current scene" means half way through a game.
+    void setSceneFactory(SceneFactory factory);
+
+    /// Advances one frame: timing, actions, the transition boundary, then behaviour.
+    ///
+    /// Public so a test can step a frame at a time and observe the scene boundary
+    /// from the outside. The alternative - a loop that only exists inside [run] -
+    /// would make "the transition is applied between frames" untestable, because
+    /// there would be no way to be *between* two frames.
+    void update();
+
+    /// Draws one frame through the active scene, or through [m_renderSystem] when
+    /// there is no scene.
+    ///
+    /// Public for the same reason as [update], and for the stronger one: a test can
+    /// run [update] and [render] separately and prove that a frame is never half
+    /// one scene and half another.
+    void render();
+
 private:
     void processEvents();
-    void update();
-    void render();
+
+    /// Applies a transition request, if one is pending. The frame boundary.
+    void applyPendingTransition();
 
     // Declaration order is load bearing, and this is the one place in the engine
     // where getting it wrong is a use-after-free rather than a compile error.
@@ -242,6 +380,40 @@ private:
     graphics::SfmlRenderer m_renderer;
     assets::SfmlAssetManager m_assets;
     systems::RenderSystem m_renderSystem;
+
+    // Declared after everything it borrows and before everything that borrows it,
+    // so the file reads in the order the pointers are valid in:
+    //
+    //   m_sceneContext   holds pointers to m_renderer, m_camera and m_assets
+    //   m_scene          holds a pointer to m_sceneContext, plus the scene's world
+    //   m_sceneFactory   builds the next m_scene
+    //
+    // `m_sceneContext` has no destructor logic, so none of these could actually
+    // dangle whatever the order. They are in this order so that a reader does not
+    // have to work that out.
+    scene::SceneContext m_sceneContext;
+
+    /// The active scene, or `nullptr`.
+    ///
+    /// A `unique_ptr` and not a `shared_ptr` in a map of live scenes, which is what
+    /// the course reference uses. A map keeps *every* scene alive for the life of
+    /// the process, so returning to the menu would find the old menu, with the old
+    /// menu's selection and the old menu's entities, still there - and the "old
+    /// scene is destroyed on transition" guarantee would be a promise the code did
+    /// not keep. One owner, one scene, destroyed on replacement: the lifetime is
+    /// deterministic, which is the property that makes a scene's raw pointers into
+    /// its own world and systems safe.
+    std::unique_ptr<scene::Scene> m_scene;
+
+    /// The request the active scene made, applied at the next frame boundary.
+    ///
+    /// A whole [scene::SceneTransition] rather than a bare id, because "stop the
+    /// application" is a legitimate outcome that is not a scene and must not have
+    /// to be expressed as one.
+    std::optional<scene::SceneTransition> m_pendingTransition;
+
+    SceneFactory m_sceneFactory;
+
     bool m_isRunning = true;
 };
 

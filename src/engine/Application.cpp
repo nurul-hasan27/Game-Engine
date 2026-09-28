@@ -35,7 +35,19 @@ Application::Application()
       // Borrowed by const reference, and declared after all three so they are
       // already alive. See the member ordering note in Application.hpp for why the
       // declaration order, and not just this line, is what makes it safe.
-      m_renderSystem{m_renderer, m_camera, m_assets}, m_isRunning{true}
+      m_renderSystem{m_renderer, m_camera, m_assets},
+      // Borrows the renderer, the camera and the asset manager, all constructed
+      // above it. It stores only pointers and has no destructor logic, so this is
+      // about the file reading in the order those pointers are valid in.
+      m_sceneContext{m_renderer, m_camera, m_assets},
+      // The one active scene, null until a transition asks for one. `unique_ptr`
+      // does not appear in this list: it default-constructs to null.
+      m_scene{},
+      m_pendingTransition{},
+      // The production builder. A `std::function` built from a plain function
+      // pointer does not allocate; the indirection exists only so a test can
+      // substitute a builder it can watch.
+      m_sceneFactory{scene::makeScene}, m_isRunning{true}
 {
     m_window.setFramerateLimit(config::kFramerateLimit);
 
@@ -107,6 +119,79 @@ void Application::processEvents()
     }
 }
 
+void Application::changeScene(const scene::SceneId id)
+{
+    // Recorded, not performed. See the header for why there is no immediate path.
+    m_pendingTransition = scene::SceneTransition::to(id);
+}
+
+std::optional<scene::SceneId> Application::sceneId() const noexcept
+{
+    // Asked of the scene, not remembered beside it, so that what is reported is
+    // what is running. A pending request is *not* consulted: a transition that has
+    // not been applied yet has not happened, and reporting it early would tell a
+    // test that asked for the menu and ran no frame that it was already in one.
+    if (m_scene == nullptr)
+    {
+        return std::nullopt;
+    }
+    return m_scene->id();
+}
+
+void Application::applyPendingTransition()
+{
+    if (!m_pendingTransition.has_value())
+    {
+        return;
+    }
+
+    const scene::SceneTransition requested = *m_pendingTransition;
+    m_pendingTransition.reset();
+
+    if (requested.quits())
+    {
+        // Applied here rather than at the end of the frame, and with no scene
+        // destroyed: the scene that asked has already finished its update, and
+        // there is nothing left worth drawing. The scene is left in place so that
+        // `currentScene()` still answers truthfully for the rest of this call.
+        m_isRunning = false;
+        return;
+    }
+
+    if (!requested.scene().has_value())
+    {
+        return; // `stay()`: the common case, and a no-op by construction.
+    }
+
+    const scene::SceneId next = *requested.scene();
+
+    // Destroy the old scene *before* building the new one, and in this order
+    // deliberately. Building first would mean two scenes alive at once, with two
+    // worlds and two sets of systems, for as long as the new one's constructor
+    // took - and a level load is not fast. Destroying first means a constructor
+    // that throws leaves no scene at all rather than a stale one pretending to be
+    // the current game.
+    //
+    // This runs at a frame boundary, so no system of the outgoing scene is
+    // executing: `update()` calls this before it calls any of them.
+    m_scene.reset();
+    // The requested id is passed to the builder but *not* recorded. What is
+    // reported later is asked of the scene that was actually built, so a builder
+    // that ignored the request cannot make `sceneId()` lie - see [Scene::id],
+    // which exists for exactly that reason.
+    m_scene = m_sceneFactory(next, m_sceneContext);
+}
+
+const scene::Scene* Application::currentScene() const noexcept
+{
+    return m_scene.get();
+}
+
+void Application::setSceneFactory(SceneFactory factory)
+{
+    m_sceneFactory = std::move(factory);
+}
+
 void Application::update()
 {
     // Measure the frame that just happened. This is real elapsed time, not
@@ -125,14 +210,36 @@ void Application::update()
     // half-done, and calling it once is enough.
     m_actions.update(m_actionMap, m_input);
 
-    // Behaviour: every system gets the same action snapshot and the same delta for
-    // this frame, and none of them can reach either another way. A system is
-    // handed the snapshot rather than the keyboard, so it cannot name a key.
-    m_systemManager.update(m_entityManager, m_actions, m_time.deltaSeconds());
+    // The frame boundary. A scene that asked to be replaced during the previous
+    // frame's update is replaced here, before anything of its own runs again and
+    // before anything new is built. Placing it after the action snapshot rather
+    // than before `tick()` is deliberate: a scene reading `actions` in its final
+    // frame is reading the same snapshot the transition decision was made from.
+    applyPendingTransition();
 
-    // Deferred destruction cleanup, after systems have run, so an entity a
-    // system flagged this frame is erased only once nothing is iterating.
-    m_entityManager.update();
+    if (m_scene != nullptr)
+    {
+        // A scene drives its own world with its own systems. The owner does not
+        // reach into it: it has no world, no systems and no way to name a
+        // component, which is what stops the loop from growing a second opinion
+        // about what a menu is.
+        m_scene->update(m_actions, m_time.deltaSeconds());
+    }
+    else
+    {
+        // Behaviour: every system gets the same action snapshot and the same delta
+        // for this frame, and none of them can reach either another way. A system
+        // is handed the snapshot rather than the keyboard, so it cannot name a key.
+        m_systemManager.update(m_entityManager, m_actions, m_time.deltaSeconds());
+
+        // Deferred destruction cleanup, after systems have run, so an entity a
+        // system flagged this frame is erased only once nothing is iterating.
+        //
+        // A scene flushes its own world's deferred destructions in its own
+        // `update`, for the same reason and at the same point: the scene owns the
+        // world, so the scene cleans it up.
+        m_entityManager.update();
+    }
 }
 
 void Application::render()
@@ -142,7 +249,19 @@ void Application::render()
     // itself; it only sequences the pass.
     m_renderer.beginFrame();
     m_renderer.clear(kWindowBackground);
-    m_renderSystem.update(m_entityManager, m_actions, 0.0F);
+
+    if (m_scene != nullptr)
+    {
+        // The active scene draws, and nothing else does. `m_renderSystem` - which
+        // draws `m_entityManager` - is skipped entirely while a scene is active, so
+        // the two worlds cannot both be drawn into one frame.
+        m_scene->render();
+    }
+    else
+    {
+        m_renderSystem.update(m_entityManager, m_actions, 0.0F);
+    }
+
     m_renderer.endFrame();
 }
 
