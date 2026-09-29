@@ -376,6 +376,21 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME scene.lifecycle COMMAND scene_test)
     set_tests_properties(scene.lifecycle PROPERTIES TIMEOUT 300)
 
+
+    # Player behaviour: the player's spawn, movement, state machine, jump, variable
+    # jump height, gravity, respawn and animation selection.
+    #
+    # No compile definitions are injected because this suite is behavioural rather than
+    # architectural: every group runs the real systems, the real loader and the real
+    # asset table, and the one source-level claim it makes - that the production fall
+    # limit is the world's bottom edge - is checked by reading the number off a real
+    # [engine::scene::PlayScene] rather than by scanning a file.
+    add_executable(player_test tests/PlayerTest.cpp)
+    target_link_libraries(player_test PRIVATE engine)
+    target_compile_options(player_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME player.behaviour COMMAND player_test)
+    set_tests_properties(player.behaviour PROPERTIES TIMEOUT 300)
+
     # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
     #
     # No window and no real textures: the loader is driven through the AssetManager
