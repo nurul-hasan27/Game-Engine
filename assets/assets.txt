@@ -140,6 +140,39 @@ Animation mario_SmallBush_dec            mario_SmallBush    1  1
 Animation mario_BigBush_dec              mario_BigBush      1  1
 Animation megaman_megaBuster_shot    megaman_megaBuster  1  1
 
+# --- the player's own animations -----------------------------------------------
+#
+# The course names three player states and three pictures: "The player Entity in the
+# game is represented by Megaman, which has several different Animations: Stand, Run,
+# and Air."
+#
+# Two of the three are declarable, and both are single frame:
+#
+#   megaman_megaStand   190 x 208   1 frame   -> Stand, and Run as well (see below)
+#   megaman_megaJump    279 x 266   1 frame   -> Air
+#
+# ### Why there is no run animation, again
+#
+# megaman_megaRun is 733 pixels wide and the course declares it as 3 frames, so
+# 733 / 3 is 244.33. 733 is prime: the only frame counts that divide it exactly are 1
+# and 733. The divisibility rule above refuses anything else, and the block comment
+# on megaman_megaRun in the animations section says what it would cost to round: each
+# of the three run sprites would be misregistered by 2 to 6 pixels and the strip's last
+# column would be silently discarded.
+#
+# Declaring the strip as a *single* frame was considered and rejected. It satisfies
+# "three distinct player animations" on paper, and draws three run sprites side by
+# side, 733 pixels wide, centred on a 40-pixel-wide player. A visibly broken picture
+# introduced to satisfy a naming requirement is worse than a stated limitation.
+#
+# So the run **state** is implemented and observable and the run **picture** is the
+# standing sprite. The honest fixes are the two this file already names for
+# megaman_megaRun: re-author the strip to a width that divides evenly, or add a
+# per-frame offset field to the animation format. Both are changes to the animation
+# core rather than to the player, which is why neither is made here.
+Animation megaman_megaStand_stand  megaman_megaStand  1  1
+Animation megaman_megaJump_air     megaman_megaJump    1  1
+
 # --- fonts -------------------------------------------------------
 Font fonts_numbers              library/fonts/numbers.ttf
 Font fonts_pixeled              library/fonts/pixeled.ttf

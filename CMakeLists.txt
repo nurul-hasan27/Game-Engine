@@ -192,6 +192,7 @@ add_library(engine STATIC
             src/engine/systems/CameraSystem.cpp
             src/engine/systems/MovementSystem.cpp
             src/engine/systems/PhysicsSystem.cpp
+            src/engine/systems/PlayerSystem.cpp
             src/engine/systems/RenderSystem.cpp)
 
 target_include_directories(engine PUBLIC

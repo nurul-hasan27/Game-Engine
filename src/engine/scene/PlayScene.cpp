@@ -10,6 +10,7 @@
 #include "engine/systems/AnimationSystem.hpp"
 #include "engine/systems/CameraSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
+#include "engine/systems/PlayerSystem.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -120,15 +121,39 @@ PlayScene::PlayScene(const SceneContext& context)
 {
     // Registration order is the update order, and every line below is load bearing.
     //
+    //   PlayerSystem     actions       -> intent, jump, gravity, state, respawn
     //   PhysicsSystem    velocity      -> position, then collisions
     //   CameraSystem     target        -> camera position, *after* physics so it
     //                                     follows where the player ended up
     //   ZoomKeysSystem   zoom actions  -> camera zoom
     //   AnimationSystem  game frame    -> which animation frame is showing, last
     //
-    // No MovementSystem, and the reason is in the class documentation: this
-    // engine's movement system acts on every transform, so registering it would
-    // move the scenery.
+    // The order is the whole design and each line constrains the next.
+    //
+    // **PlayerSystem first**, because it writes the velocity that PhysicsSystem
+    // integrates in the *same* frame. After physics would mean the player's walk
+    // starts a frame late, and the lateness would differ on the first frame after a
+    // scene transition than on the hundredth, which reads as an inconsistency rather
+    // than as input lag.
+    //
+    // **PhysicsSystem before CameraSystem**, which predates this phase and still
+    // holds: the camera follows where the player *ended* up, not where they started.
+    //
+    // **AnimationSystem last**, so the animation PlayerSystem chose this frame is the
+    // one advanced this frame. Reversed, every state change would be a frame late and
+    // the walk cycle would stutter at each boundary.
+    //
+    // No MovementSystem, and the reason is in the class documentation: this engine's
+    // movement system acts on *every* transform, so registering it would set a
+    // velocity on every ground tile and every cloud. PlayerSystem is the replacement
+    // and the difference is the whole point - it acts on entities carrying
+    // components::Player, of which the level contains exactly one.
+    //
+    // The fall limit is the world's bottom edge, measured from the grid this scene
+    // built. It is an argument rather than a constant because it is a property of the
+    // level: a world four cells tall respawns the player sooner, and a magic number
+    // in PlayerSystem would respawn them at the same place in every world.
+    m_systems.add<engine::systems::PlayerSystem>(m_cellsTall * level::LevelGrid::kCellSize);
     m_systems.add<engine::systems::PhysicsSystem>();
     m_systems.add<engine::systems::CameraSystem>(context.camera(), std::string{level::kPlayerTag});
     // Local class, not an engine one - see its own documentation above.

@@ -1,6 +1,7 @@
 #include "engine/components/Animation.hpp"
 #include "engine/components/Body.hpp"
 #include "engine/components/Collider.hpp"
+#include "engine/components/Player.hpp"
 #include "engine/components/PlayerConfig.hpp"
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Transform.hpp"
@@ -212,6 +213,11 @@ void declareTheCommittedLevel(FakeAssetManager& assets)
     assets.declare("mario_SmallBush_dec", 150, 68);
     assets.declare("mario_BigBush_dec", 186, 79);
     assets.declare("megaman_megaBuster_shot", 32, 26);
+    // The player's own two animations, added by Phase 16. The sizes are the real ones,
+    // measured from the committed artwork, because a test that declared 190x208 while
+    // the library says 190x208 would stop noticing if the artwork changed.
+    assets.declare("megaman_megaStand_stand", 190, 208);
+    assets.declare("megaman_megaJump_air", 279, 266);
 }
 
 /// Overwrites a frame of stack with a pattern, and returns what it wrote.
@@ -1426,8 +1432,28 @@ void testATileHasNoRectangleSoItIsNotDrawnTwice()
         static_cast<void>(rectangle);
     }
 
-    // Exactly one rectangle in the world, and it is the player's.
-    CHECK(countIn(world.query<engine::components::Rectangle>()) == 1U);
+    // **No** rectangle in the world at all, and this is the count Phase 16 moved.
+    //
+    // Until this phase the player *was* a rectangle - the level format gave it no
+    // animation of its own, so it was drawn as a coloured box - and the assertion was
+    // "exactly one, and it is the player's". The player now carries an
+    // [engine::components::Animation] like every other drawn entity, and the rectangle
+    // was removed rather than kept alongside it, because the renderer's two queries
+    // are separate and an entity in both is drawn twice.
+    //
+    // So this is a change of what the world contains, not a weakened check: zero is
+    // now the number that means "nothing is drawn twice", and it is a *stronger*
+    // statement than "one, and it is the player's", which permitted exactly the
+    // double-draw the group is named for.
+    CHECK(countIn(world.query<engine::components::Rectangle>()) == 0U);
+
+    // Restated in the form the group is actually about: nothing carries both, so
+    // nothing can be drawn by both queries.
+    for (auto&& [entity, animation] : world.query<engine::components::Animation>())
+    {
+        CHECK_FALSE(entity.hasComponent<engine::components::Rectangle>());
+        static_cast<void>(animation);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,11 +1624,20 @@ void testThePlayerIsDynamicAndTagged()
     }
 }
 
-void testThePlayerIsDrawnAsARectangleUntilItHasAnAnimation()
+void testThePlayerIsDrawnAsAnAnimationWithItsSpriteCentred()
 {
-    // The level format gives a player no animation of its own - only a bullet
-    // animation - so the player is drawn as the plain rectangle the renderer already
-    // knows. Exactly one, and it is the player's.
+    // The successor to a group named `the player is drawn as a rectangle *until it has
+    // an animation*`, which is this phase. The old contract was that the player had no
+    // animation and was therefore a coloured rectangle; the player has one now, and the
+    // rectangle is gone.
+    //
+    // The idea the old group carried is kept rather than dropped: **what is drawn is
+    // what collides**. It used to be checked as "the rectangle's size equals the
+    // collider's size", which was a proxy. It is now checked directly, as the
+    // relationship between the three things that have to agree - the sprite's centre,
+    // the collider's centre, and the transform's position - because that relationship
+    // is what the course actually states: "The player's sprite and bounding box are
+    // centered on the player's position."
     FakeAssetManager assets;
     declareTheCommittedLevel(assets);
     const LevelLoader loader{assets};
@@ -1611,21 +1646,54 @@ void testThePlayerIsDrawnAsARectangleUntilItHasAnAnimation()
     EntityManager world;
     static_cast<void>(loader.spawn(levelWithOneTile("mario_ground_tile", 0.0F, 0.0F), world, grid));
 
-    const auto rectangles = world.query<engine::components::Rectangle>();
-    CHECK(countIn(rectangles) == 1U);
-
-    for (auto&& [entity, rectangle] : rectangles)
+    // The player is a sprite, and the animation is the committed standing artwork.
+    const auto animations = world.query<engine::components::Animation>();
+    std::size_t playerAnimations = 0U;
+    for (auto&& [entity, animation] : animations)
     {
-        CHECK(entity.tag() == engine::level::kPlayerTag);
-        // Same size as the collider, so what is drawn is what collides.
-        CHECK_NEAR_VEC(rectangle.size, Vec2(32.0F, 32.0F));
+        if (entity.tag() == engine::level::kPlayerTag)
+        {
+            ++playerAnimations;
+            CHECK(animation.assetName == "megaman_megaStand_stand");
+            // Looping: a player whose animation ended would be destroyed by the
+            // animation system, and the level would start again with no player in it.
+            CHECK(animation.repeat);
+            CHECK_FALSE(animation.ended);
+        }
     }
+    CHECK(playerAnimations == 1U);
 
-    // And it has no animation, which is the whole reason for the rectangle.
-    for (auto&& [entity, animation] : world.query<engine::components::Animation>())
+    // No rectangle anywhere, so nothing is drawn twice.
+    CHECK(countIn(world.query<engine::components::Rectangle>()) == 0U);
+
+    // The centring. The sprite frame is 190x208 and the collider is 32x32 in this
+    // fixture, and they are **not** the same size - deliberately, because the honest
+    // relationship is a shared centre rather than one sized to the other. What has to
+    // hold is that the transform sits at the centre of both, which is what the
+    // renderer and the physics each independently assume.
+    EntityManager placed;
+    static_cast<void>(loader.spawn(levelWithOneTile("mario_ground_tile", 0.0F, 0.0F), placed, grid));
+    for (auto&& [entity, transform, collider] :
+         placed.query<Transform, engine::components::Collider>())
     {
-        CHECK(entity.tag() != engine::level::kPlayerTag);
-        static_cast<void>(animation);
+        if (entity.tag() != engine::level::kPlayerTag)
+        {
+            continue;
+        }
+
+        // The collider is centred on the transform: the Aabb the physics builds from
+        // these two has its centre exactly at the position.
+        const engine::physics::Aabb box{transform.position, collider.size};
+        CHECK_NEAR(box.center().x, transform.position.x);
+        CHECK_NEAR(box.center().y, transform.position.y);
+
+        // And the sprite frame is centred on the same point, because
+        // `SfmlRenderer::drawTexture` sets the origin to the middle of the region it
+        // draws. So the frame's centre and the collider's centre are the same point,
+        // and the frame is larger than the collider on both axes.
+        const engine::assets::Animation& stand = assets.animation("megaman_megaStand_stand");
+        CHECK(stand.frameWidth() > static_cast<int>(collider.size.x));
+        CHECK(stand.frameHeight() > static_cast<int>(collider.size.y));
     }
 }
 
@@ -2088,8 +2156,8 @@ int main()
         {"a decoration is not affected by the tile loop", &testADecorationIsNotAffectedByTheTileLoop},
         {"the player keeps every value the level gave it", &testThePlayerKeepsEveryValueTheLevelGaveIt},
         {"the player is dynamic and tagged", &testThePlayerIsDynamicAndTagged},
-        {"the player is drawn as a rectangle until it has an animation",
-         &testThePlayerIsDrawnAsARectangleUntilItHasAnAnimation},
+        {"the player is drawn as an animation with its sprite centred",
+         &testThePlayerIsDrawnAsAnAnimationWithItsSpriteCentred},
         {"spawn returns the entity count", &testSpawnReturnsTheEntityCount},
         {"the committed level spawns with the right tags", &testTheCommittedLevelSpawnsWithTheRightTags},
         {"the committed level is drawn and collides", &testTheCommittedLevelIsDrawnAndCollides},

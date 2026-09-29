@@ -1083,17 +1083,25 @@ void testThePlaySceneRegistersItsOwnSystems()
     SceneFixture fixture;
     const std::unique_ptr<PlayScene> play = std::make_unique<PlayScene>(fixture.context());
 
-    // Four, in the order the level has always used. Registration order *is* update
-    // order, and the count is pinned so a system cannot be added or dropped without
-    // this suite noticing.
-    CHECK(play->systems().systemCount() == 4U);
+    // Five, in the order the level has always used, with the player's own system in
+    // front of all of them. Registration order *is* update order, and the count is
+    // pinned so a system cannot be added or dropped without this suite noticing.
+    //
+    // Phase 16 added `PlayerSystem` at the **front**, and the position is the assertion
+    // that matters rather than the fact that it was added: it writes the velocity
+    // [engine::systems::PhysicsSystem] integrates in the same frame, so a player that
+    // moved one frame late would feel it. The names are listed individually so that
+    // reordering them - which would keep the count at five and break the game - is a
+    // failure here.
+    CHECK(play->systems().systemCount() == 5U);
 
-    if (play->systems().systemCount() == 4U)
+    if (play->systems().systemCount() == 5U)
     {
-        CHECK(std::string{play->systems().systemAt(0U).name()} == "PhysicsSystem");
-        CHECK(std::string{play->systems().systemAt(1U).name()} == "CameraSystem");
-        CHECK(std::string{play->systems().systemAt(2U).name()} == "ZoomKeysSystem");
-        CHECK(std::string{play->systems().systemAt(3U).name()} == "AnimationSystem");
+        CHECK(std::string{play->systems().systemAt(0U).name()} == "PlayerSystem");
+        CHECK(std::string{play->systems().systemAt(1U).name()} == "PhysicsSystem");
+        CHECK(std::string{play->systems().systemAt(2U).name()} == "CameraSystem");
+        CHECK(std::string{play->systems().systemAt(3U).name()} == "ZoomKeysSystem");
+        CHECK(std::string{play->systems().systemAt(4U).name()} == "AnimationSystem");
     }
 
     // No movement system, and the absence is load bearing: this engine's movement
@@ -1141,18 +1149,34 @@ void testThePlaySceneUpdatesAndRenders()
     SceneFixture fixture;
     PlayScene play{fixture.context()};
 
-    // A frame's worth of behaviour: physics, camera follow, zoom keys and animation
-    // all run against the scene's own world, and nothing escapes.
+    // A frame's worth of behaviour: the player, physics, camera follow, zoom keys and
+    // animation all run against the scene's own world, and nothing escapes.
     const Vec2 before = play.world().getEntities("level.player").begin()->getComponent<Transform>().position;
     play.update(ActionState{}, 0.016F);
     const Vec2 after = play.world().getEntities("level.player").begin()->getComponent<Transform>().position;
 
-    // The player does not move yet, and that is this phase's decision rather than an
-    // omission: there is no movement system. What the frame *does* do is drive the
-    // camera onto the player.
+    // ### The player now moves, and this group used to assert that it did not
+    //
+    // Phase 15 wrote: "The player does not move yet, and that is this phase's decision
+    // rather than an omission: there is no movement system." That contract is obsolete -
+    // Phase 16 added `PlayerSystem` - and the assertion that encoded it failed by
+    // 0.23 pixels, which is `900 * 0.016 * 0.016`: the level's gravity, applied to a
+    // player spawned in mid-air, integrated for one frame.
+    //
+    // What is asserted instead is the behaviour itself rather than its absence: with
+    // no input the player does not move horizontally, and does fall vertically by
+    // gravity times dt squared. The fall is the arithmetic of semi-implicit Euler with
+    // `velocity += gravity * dt` followed by `position += velocity * dt`, and pinning
+    // it to a third of a pixel says "gravity is applied before integration, in the
+    // same frame" rather than "something moved".
     CHECK_NEAR(before.x, after.x, 0.0001F);
-    CHECK_NEAR(before.y, after.y, 0.0001F);
-    CHECK_NEAR(fixture.camera().position().x, before.x, 0.001F);
+    CHECK(after.y > before.y);
+    CHECK_NEAR(after.y - before.y, 900.0F * 0.016F * 0.016F, 0.01F);
+
+    // The camera followed the player, so it is on the position the frame *ended* at -
+    // after physics, which is why `CameraSystem` is registered after it.
+    CHECK_NEAR(fixture.camera().position().x, after.x, 0.001F);
+    CHECK_NEAR(fixture.camera().position().y, after.y, 0.001F);
 
     // And it draws: a real frame, through the real renderer, with the level's
     // hundreds of entities in it.
@@ -1478,7 +1502,7 @@ void testTheMenuTransitionsToPlayAndBack()
     if (play != nullptr)
     {
         CHECK(play->world().aliveEntityCount() > 28U);
-        CHECK(play->systems().systemCount() == 4U);
+        CHECK(play->systems().systemCount() == 5U);
     }
 
     application.render();
@@ -2250,7 +2274,7 @@ void testScenesDoNotRegisterIntoTheApplication()
     CHECK(play != nullptr);
     if (play != nullptr)
     {
-        CHECK(play->systems().systemCount() == 4U);
+        CHECK(play->systems().systemCount() == 5U);
     }
     CHECK(application.systemManager().systemCount() == 0U);
 

@@ -1,15 +1,15 @@
 #include "engine/level/LevelLoader.hpp"
 
-#include "engine/Color.hpp"
 #include "engine/components/Animation.hpp"
 #include "engine/components/Body.hpp"
 #include "engine/components/Collider.hpp"
+#include "engine/components/Player.hpp"
 #include "engine/components/PlayerConfig.hpp"
-#include "engine/components/Rectangle.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/physics/Aabb.hpp"
 
 #include <functional>
+#include <string_view>
 
 namespace engine::level
 {
@@ -27,13 +27,30 @@ namespace
 }
 
 /// The colour a player is drawn in until it has an animation of its own.
+/// The animation a player is in when it is standing still.
 ///
-/// The level format gives a player no animation - only a *bullet* animation - so
-/// until a later phase supplies one, the player is drawn as the plain rectangle
-/// the renderer already knows how to draw, and the colour is what makes it
-/// findable on screen. Deliberately the same orange the engine's demo bodies use,
-/// so a player without an animation is not a surprise to anyone.
-constexpr Color kPlayerColour{0.95F, 0.78F, 0.25F, 1.0F};
+/// Named here rather than in the level file because the level format has no field
+/// for it. The `Player` record names exactly one animation - the bullet - and the
+/// format is the course's, so a field for the player's own three animations would be
+/// inventing syntax. The engine knows which artwork it has loaded; a level does not
+/// get to ask for a picture that does not exist.
+///
+/// [engine::systems::PlayerSystem] holds the other two and the state machine that
+/// chooses between all three. The name is repeated there rather than shared through a
+/// header, because the loader needs the *spawn* picture and the system needs the
+/// *mapping*, and those are two different facts that happen to name the same
+/// animation today.
+///
+/// The player used to be drawn as an orange rectangle, and the reason it was is
+/// recorded in the test that pinned it: "The level format gives a player no animation
+/// - only a bullet animation - so until a later phase supplies one...". This is that
+/// later phase. The rectangle is gone rather than kept alongside the sprite, because
+/// the renderer's rectangle and animation queries are separate and an entity carrying
+/// both is drawn by both.
+
+/// The declaration is one line, and the words above it are the reason it is one line
+/// and not three names and a lookup table.
+constexpr std::string_view kPlayerStandAnimation = "megaman_megaStand_stand";
 
 /// A looping animation component naming `animationName`.
 ///
@@ -174,16 +191,28 @@ std::size_t LevelLoader::spawn(const Level& level, engine::ecs::EntityManager& w
             // the level's behalf.
             const Vec2 size = player.boundingBoxSize;
 
+            // The centre of the collider box, which is the centre of the sprite too.
+            // The course says it in one line - "The player's sprite and bounding box
+            // are centered on the player's position" - and this is the same `centreOf`
+            // the tiles use, so a player and a tile at the same grid coordinate have
+            // the same anchor rule. The sprite is **not** cropped to the collider:
+            // megaStand is 190x208 and the collider is 40x60, and the honest
+            // relationship is that they share a centre, not that one has been sized to
+            // the other. An offset chosen to make one screenshot look right would be a
+            // lie about where the player is.
+            const Vec2 position = grid.centreOf(player.gridX, player.gridY, size);
+
             engine::ecs::Entity& entity = world.addEntity(std::string{kPlayerTag});
             created.emplace_back(entity);
 
-            entity.addComponent<components::Transform>(transformAt(grid.centreOf(player.gridX, player.gridY, size)));
+            entity.addComponent<components::Transform>(transformAt(position));
 
-            // Drawn as a plain rectangle, because there is no player animation to draw
-            // yet. A later phase that adds one must **remove** this, or the entity will
-            // be drawn twice: the renderer's rectangle query and its animation query
-            // are separate, and an entity carrying both is drawn by both.
-            entity.addComponent<components::Rectangle>(components::Rectangle{size, kPlayerColour});
+            // The player is a sprite now, and the rectangle the comment above warned
+            // about has been **removed** rather than left alongside. The renderer's
+            // rectangle query and its animation query are separate, so an entity
+            // carrying both is drawn by both - twice, in two places, with two
+            // different sizes.
+            entity.addComponent<components::Animation>(loopingAnimation(std::string{kPlayerStandAnimation}));
 
             entity.addComponent<components::Collider>(components::Collider{size});
             entity.addComponent<components::Body>(components::Body{physics::BodyType::Dynamic});
@@ -194,6 +223,18 @@ std::size_t LevelLoader::spawn(const Level& level, engine::ecs::EntityManager& w
             entity.addComponent<components::PlayerConfig>(
                 components::PlayerConfig{player.leftRightSpeed, player.jumpSpeed, player.maxSpeed, player.gravity,
                                          player.bulletAnimationName});
+
+            // The respawn anchor is the spawn point itself, not a second computation
+            // of it. Copying the one position means a respawn restores exactly where
+            // the level put the player, and the two can never drift apart.
+            //
+            // `grounded` starts **false**, not true. The player is placed in the air
+            // at its spawn cell and is genuinely airborne until it lands, so claiming
+            // otherwise would let it jump on its very first frame from mid-air. The
+            // first update corrects it either way; starting honest means the frame
+            // before the correction is not a lie.
+            entity.addComponent<components::Player>(components::Player{components::PlayerState::Stand, false, false,
+                                                                        position});
         }
     }
     catch (...)

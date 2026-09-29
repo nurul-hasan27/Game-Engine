@@ -1650,10 +1650,11 @@ void testTheShippedConfigurationParses()
     // reject is worthless, so this is the only version of the check that matters.
     const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
 
-    // 24 textures + 3 fonts + 9 animations. The textures and fonts are the whole
-    // committed library and have not moved; Phase 13 added the six animations,
-    // taking animations from 3 to 9.
-    CHECK(entries.size() == 36U);
+    // 24 textures + 3 fonts + 11 animations. The textures and fonts are the whole
+    // committed library and have not moved; Phase 13 added the six level animations,
+    // taking animations from 3 to 9, and Phase 16 added the two player animations,
+    // taking them from 9 to 11.
+    CHECK(entries.size() == 38U);
 }
 
 void testTheShippedConfigurationHasTheExpectedEntryCounts()
@@ -1696,12 +1697,14 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
     //
     // The group below derives the texture and font numbers from the library itself,
     // so this one is the statement of intent rather than a second guess at the same
-    // fact. The texture and font numbers did not move in Phase 13 - no new artwork
-    // was added, only new animations over artwork already declared.
+    // fact. The texture and font numbers have not moved in Phase 13 or Phase 16 - no
+    // new artwork was added by either, only new animations over artwork already
+    // declared. The animation count moved twice: 3 to 9 for the six level
+    // animations, and 9 to 11 for the player's stand and air.
     CHECK(textures == 24U);
     CHECK(fonts == 3U);
-    CHECK(animations == 9U);
-    CHECK(textures + fonts + animations == 36U);
+    CHECK(animations == 11U);
+    CHECK(textures + fonts + animations == 38U);
 
     // A stronger claim than the flat total: exactly three animations advance, and
     // exactly six are a single still frame. If a later phase adds a multi-frame
@@ -1726,8 +1729,83 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
         }
     }
 
+    // Three multi-frame strips, and eight single-frame ones: the six level
+    // animations plus the player's stand and air. The split matters because the
+    // multi-frame ones are the only ones with a frame width to divide, and a frame
+    // count of 1 divides every width exactly - which is why declaring the player's
+    // stand and air this way is possible at all while the 733-pixel run strip is not.
     CHECK(multiFrame == 3U);
-    CHECK(singleFrame == 6U);
+    CHECK(singleFrame == 8U);
+}
+
+void testDeclaringTheRunStripAsThreeFramesIsRejected()
+{
+    // The arithmetic, through the real parser and the real loader, so the rule is not
+    // merely asserted in a comment.
+    //
+    // 733 pixels and 3 frames does not divide: 733 / 3 is 244.33. The manager throws
+    // rather than slicing the strip into three misregistered frames and silently
+    // discarding its last column. This is the exact code path a well-meaning edit to
+    // `assets/assets.txt` would take, run here against a configuration written into a
+    // temporary directory so the shipped one is untouched.
+    //
+    // It lives in this suite rather than in `animation_test` because this is the suite
+    // that owns `TemporaryDirectory`; the other half of the pair - that the name is
+    // not declared in the shipped configuration at all - is in `animation_test`.
+    // The strip is looked up **by name** in the shipped configuration rather than
+    // written out as a path. A test that hardcoded `library/images/megaman/megaRun.png`
+    // would keep passing after the texture was renamed, and would then be measuring a
+    // file the game no longer loads. Looking it up means this group also asserts that
+    // the texture the reference engine calls `TexRun` is still declared at all.
+    const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
+    const fs::path base = shippedConfiguration().parent_path();
+
+    fs::path megaman;
+    for (const engine::assets::AssetEntry& entry : entries)
+    {
+        if (entry.type == engine::assets::AssetType::Texture && entry.name == "megaman_megaRun")
+        {
+            megaman = base / entry.path;
+        }
+    }
+
+    CHECK_FALSE(megaman.empty());
+    if (megaman.empty())
+    {
+        return;
+    }
+    CHECK(fs::exists(megaman));
+
+    TemporaryDirectory directory;
+    const fs::path config = directory.write("assets.txt",
+                                             "Texture  megaman_megaRun  " + megaman.string() + "\n"
+                                             "Animation megaman_megaRun_run  megaman_megaRun  3  8\n");
+
+    bool threw = false;
+    try
+    {
+        const SfmlAssetManager manager{config};
+        static_cast<void>(manager.animationCount());
+    }
+    catch (const engine::assets::AssetLoadError&)
+    {
+        threw = true;
+    }
+    CHECK(threw);
+
+    // And the same configuration with a frame count that *does* divide loads, so the
+    // rejection above is about the division and not about the path, the parser, or the
+    // name. Without this, "it threw" could mean "it threw for the wrong reason", which
+    // is the failure mode a negative test has by construction.
+    TemporaryDirectory single;
+    const fs::path loadable = single.write("assets.txt",
+                                           "Texture  megaman_megaRun  " + megaman.string() + "\n"
+                                           "Animation megaman_megaRun_run  megaman_megaRun  1  8\n");
+
+    const SfmlAssetManager manager{loadable};
+    CHECK(manager.animationCount() == 1U);
+    CHECK(manager.animation("megaman_megaRun_run").frameWidth() == 733);
+    CHECK(manager.animation("megaman_megaRun_run").frameHeight() == 246);
 }
 
 void testEveryConfiguredPathExists()
@@ -1817,13 +1895,13 @@ void testEveryConfiguredAssetLoadsThroughTheManager()
     // The end-to-end statement: the shipped configuration, loaded by the real
     // loader, resolves every name to a real resource. Constructing the manager
     // already throws if any file will not load, so reaching the checks below means
-    // all 36 entries were accepted. 30 before Phase 13, which added six animations
-    // and no textures or fonts.
+    // all 38 entries were accepted. 30 before Phase 13, which added six animations,
+    // and 36 before Phase 16, which added two more and no textures or fonts.
     const SfmlAssetManager manager{shippedConfiguration()};
 
     CHECK(manager.textureCount() == 24U);
     CHECK(manager.fontCount() == 3U);
-    CHECK(manager.animationCount() == 9U);
+    CHECK(manager.animationCount() == 11U);
 
     for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
     {
@@ -1954,7 +2032,9 @@ int main()
         {"the shipped configuration parses", &testTheShippedConfigurationParses},
         {"the shipped configuration has the expected entry counts",
          &testTheShippedConfigurationHasTheExpectedEntryCounts},
-        {"every configured path exists", &testEveryConfiguredPathExists},
+        {"declaring the run strip as three frames is rejected",
+       &testDeclaringTheRunStripAsThreeFramesIsRejected},
+      {"every configured path exists", &testEveryConfiguredPathExists},
         {"configured names are unique", &testConfiguredNamesAreUnique},
         {"the shipped configuration names every library file", &testTheShippedConfigurationNamesEveryLibraryFile},
         {"every configured asset loads through the manager", &testEveryConfiguredAssetLoadsThroughTheManager},

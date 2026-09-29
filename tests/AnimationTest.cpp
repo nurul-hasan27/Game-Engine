@@ -1363,16 +1363,85 @@ void testRenderSystemDoesNotWriteTheAnimationComponent()
 // Through the real manager and the real asset
 // ---------------------------------------------------------------------------
 
+void testTheShippedPlayerAnimationsResolve()
+{
+    // The two player animations, through the real manager and the real artwork.
+    //
+    // These are checked by name and by frame size rather than only counted, because
+    // they are the two names a gameplay system resolves every frame: a typo in either
+    // would not fail a count, it would throw out of [engine::systems::AnimationSystem]
+    // or [engine::systems::RenderSystem] the first time a player drew.
+    SfmlAssetManager assets = shippedManager();
+
+    const auto& stand = assets.animation("megaman_megaStand_stand");
+    CHECK(stand.textureName() == "megaman_megaStand");
+    CHECK(stand.frameCount() == 1U);
+    CHECK(stand.frameWidth() == 190);
+    CHECK(stand.frameHeight() == 208);
+
+    const auto& air = assets.animation("megaman_megaJump_air");
+    CHECK(air.textureName() == "megaman_megaJump");
+    CHECK(air.frameCount() == 1U);
+    CHECK(air.frameWidth() == 279);
+    CHECK(air.frameHeight() == 266);
+}
+
+void testTheRunStripIsStillUndeclaredAndTheReasonStillHolds()
+{
+    // The player has three states and only two pictures, and this group is why.
+    //
+    // The course declares `megaman_megaRun` as a 3-frame animation. The strip is 733
+    // pixels wide, so 733 / 3 is 244.33, and 733 is prime, so no frame count between 1
+    // and 733 divides it. The engine's rule - a frame count that does not divide the
+    // texture width exactly is rejected rather than rounded - is therefore still in
+    // force, and `megaman_megaRun` is still not declared.
+    //
+    // Asserted as a *negative*, on purpose. The obvious failure mode for the next
+    // phase is somebody "fixing" the missing run animation by adding
+    // `Animation megaman_megaRun_run megaman_megaRun 3 8` to `assets/assets.txt`, and
+    // this group is what makes that a test failure rather than a decision made by
+    // accident. The complementary half - that declaring it really does throw, rather
+    // than merely being absent - is in `asset_loader_test`, which owns the temporary
+    // configuration fixture this suite does not have.
+    SfmlAssetManager assets = shippedManager();
+
+    bool threw = false;
+    try
+    {
+        static_cast<void>(assets.animation("megaman_megaRun"));
+    }
+    catch (const engine::assets::AssetNotFoundError&)
+    {
+        threw = true;
+    }
+    CHECK(threw);
+
+    // And the standing animation it falls back to is a real, loaded one - the
+    // limitation is "there is no run picture", not "the player has no picture".
+    CHECK(assets.animation("megaman_megaStand_stand").frameWidth() > 0);
+}
+
+
 void testTheShippedAnimationsPlay()
 {
     // The entries `assets/assets.txt` declares, through the real loader and the real
-    // artwork. Nine of them: the three multi-frame strips below, and the six
-    // single-frame animations Phase 13 added for `assets/levels/level1.txt`. The
-    // per-animation checks that follow are all about the multi-frame ones, because a
-    // one-frame animation has a frame size and nothing else to assert.
+    // artwork. Eleven of them: the three multi-frame strips below, the six
+    // single-frame animations Phase 13 added for `assets/levels/level1.txt`, and the
+    // two Phase 16 added for the player - `megaman_megaStand_stand` and
+    // `megaman_megaJump_air`.
+    //
+    // The count is a real assertion rather than a formality: it is what notices an
+    // animation being *removed* from the shipped configuration, which is the failure
+    // that would otherwise be silent, because a level naming a missing animation
+    // throws at load time and nothing else refers to these.
+    //
+    // The per-animation checks that follow are all about the multi-frame ones, because
+    // a one-frame animation has a frame size and nothing else to assert. The two
+    // player animations are checked properly in the two groups below, because they
+    // are the ones a gameplay system resolves by name.
     SfmlAssetManager assets = shippedManager();
 
-    CHECK(assets.animationCount() == 9U);
+    CHECK(assets.animationCount() == 11U);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameCount() == 2U);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameWidth() == 50);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameHeight() == 41);
@@ -1780,6 +1849,9 @@ int main()
         {"an animation without a transform is not drawn", &testAnAnimationWithoutATransformIsNotDrawn},
         {"render system applies the camera to an animation", &testRenderSystemAppliesTheCameraToAnAnimation},
         {"render system does not write the animation component", &testRenderSystemDoesNotWriteTheAnimationComponent},
+        {"the shipped player animations resolve", &testTheShippedPlayerAnimationsResolve},
+        {"the run strip is still undeclared and the reason still holds",
+         &testTheRunStripIsStillUndeclaredAndTheReasonStillHolds},
         {"the shipped animations play", &testTheShippedAnimationsPlay},
         {"a shipped animation walks through its frames", &testAShippedAnimationWalksThroughItsFrames},
         {"a shipped non repeating animation ends", &testAShippedNonRepeatingAnimationEnds},
