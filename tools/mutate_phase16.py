@@ -43,9 +43,16 @@ ASSETS = "assets/assets.txt"
 MUTATIONS = []
 
 
-def mutation(name, description, intent, patches):
-    MUTATIONS.append({"name": name, "description": description,
-                      "intent": intent, "patches": patches})
+def mutation(name, description, intent, patches, equivalent=None):
+    """`equivalent` is the proven reason a mutation cannot be observed, if it has one.
+
+    A mutation that survives every suite is not automatically a defect in the tests: it
+    can be a genuine equivalence. Declaring the reason here means the harness reports
+    EQUIVALENT with the explanation attached, rather than leaving it in UNDETECTED where
+    it reads as an unexplained failure. Declaring one is a claim, so it has to say why.
+    """
+    MUTATIONS.append({"name": name, "description": description, "intent": intent,
+                      "patches": patches, "equivalent": equivalent})
 
 
 def patch(path, old, new, count=1):
@@ -456,13 +463,21 @@ mutation(
 
 mutation(
     "respawn-position-only",
-    "The respawn restores the position but not the velocity, so the player shoots off "
-    "the level on the next frame.",
-    "player_test: 'falling out of the world respawns the player' - which checks both "
-    "velocity axes",
+    "The respawn restores the position but not the velocity.",
+    "player_test: 'falling out of the world respawns the player' checks both velocity "
+    "axes, and cannot fail - because the respawn runs at step 2 and steps 3 and 6 zero "
+    "the same two components on the same frame. Step 3 writes `velocity.x` from the "
+    "input and step 6 writes `velocity.y` for the now-grounded player, so the deleted "
+    "line has no observable effect. It is kept anyway, and the reasoning is written "
+    "next to it in PlayerSystem.cpp: a respawn that reads as 'restore everything' should "
+    "not depend on two later steps happening to agree.",
     [patch(sysfile("PlayerSystem.cpp"),
            "    transform.velocity = Vec2{0.0F, 0.0F};\n    transform.scale = Vec2{1.0F, 1.0F};",
            "    transform.scale = Vec2{1.0F, 1.0F}; // MUTATION: velocity kept")],
+    equivalent="A respawn at step 2 is immediately followed by step 3 writing "
+               "velocity.x from the input and step 6 writing velocity.y for a grounded "
+               "player, so both components are zeroed on the same frame whether or not "
+               "the respawn zeroes them. Proven equivalent, and kept deliberately.",
 )
 
 mutation(
@@ -798,14 +813,29 @@ def failing_checks(output):
     return found
 
 
-def classify(clean_failed, abnormal, ran, build_ok, timeouts):
-    """The five outcomes, decided by what the run actually did."""
+def classify(clean_failed, abnormal, ran, build_ok, timeouts, equivalent):
+    """The five outcomes, decided by what the run actually did.
+
+    ### A clean failure outranks a crash *somewhere else*
+
+    `megaman_megaRun` declared as 3 frames makes the asset manager throw from its
+    constructor, so every suite that builds one aborts - and eight suites also fail with
+    real assertion failures first. Reporting that as CRASHED alone would throw away eight
+    genuine detections and make the mutation look like a defect in the tests. Reporting
+    it as TEST_DETECTED alone would hide the crashes.
+
+    So a clean `Failed` is a detection, and the abnormal suites are recorded alongside
+    it in the detail. CRASHED is reserved for the case where **no** suite managed to
+    assert anything, which is the case where the crash is all there is to report.
+    """
     if not build_ok:
         return "BUILD_REJECTED"
-    if timeouts or abnormal:
-        return "CRASHED"
     if clean_failed:
         return "TEST_DETECTED"
+    if timeouts or abnormal:
+        return "CRASHED"
+    if equivalent:
+        return "EQUIVALENT"
     return "UNDETECTED"
 
 
@@ -861,9 +891,10 @@ def main():
                 game_code, _ = run_game()
                 if game_code is not None and game_code != 0:
                     abnormal["game"] = "exit {}".format(game_code)
-                outcome = classify(clean_failed, abnormal, expected, built, timeouts)
+                outcome = classify(clean_failed, abnormal, expected, built, timeouts,
+                                   entry.get("equivalent"))
                 detail = json.dumps({"clean_failed": clean_failed, "abnormal": abnormal,
-                                     "game_exit": game_code})
+                                     "game_exit": game_code, "equivalent": entry.get("equivalent")})
                 checks = failing_checks(test_output)
                 detail += "\n    " + json.dumps(checks)[:900]
         except Exception as error:  # noqa: BLE001
@@ -894,7 +925,8 @@ def main():
     for outcome in sorted(tally):
         print("{:16} {}".format(outcome, len(tally[outcome])))
         for name in tally[outcome]:
-            print("    - {}".format(name))
+            reason = next((m["equivalent"] for m in MUTATIONS if m["name"] == name), None)
+            print("    - {}{}".format(name, "  [proven equivalent]" if reason else ""))
     print("total: {} mutations".format(len(results)))
 
 

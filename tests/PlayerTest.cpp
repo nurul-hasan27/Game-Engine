@@ -558,6 +558,42 @@ void testTheSpawnPositionComesFromTheGridCell()
     CHECK_NEAR(elsewhere.playerY(), kWorldHeight - (2.0F * kCell) - 30.0F, 0.0001F);
 }
 
+void testAFreshlySpawnedPlayerIsNotGrounded()
+{
+    // The loader places the player in the air and says so.
+    //
+    // The committed level spawns the player at cell (3, 4) with the ground at cell 0, so
+    // the spawn is four cells up and the player is genuinely airborne. Claiming
+    // `grounded` at that moment would let it jump on its very first frame from mid-air,
+    // and would stop gravity acting on the frame it is spawned - which is the frame
+    // `settle` exists to absorb, and the reason it is invisible everywhere else.
+    //
+    // This is the *state as spawned*, so it is asserted on the very first frame, with no
+    // settling at all. It is also the only place in the suite that a load-time value
+    // like this can be observed, because after one frame the world has already made it
+    // true or false on its own.
+    Level level = levelWith(playerRecordAt(0.0F, 6.0F), 1);
+    PlayerFixture fixture{level, 100000.0F};
+
+    // Spawned in the air, six cells up, with the floor one cell below the origin.
+    CHECK(fixture.state().grounded == false);
+    CHECK(fixture.playerY() < kFloorTop - (2.0F * kCell));
+
+    // The first frame therefore applies gravity: the player starts falling.
+    const float before = fixture.playerY();
+    fixture.step(ActionState{});
+
+    CHECK(fixture.playerY() > before);
+    CHECK(fixture.transform().velocity.y > 0.0F);
+    CHECK_FALSE(fixture.state().grounded);
+
+    // And it cannot jump from there, which is the consequence that matters.
+    ActionDriver jump;
+    fixture.step(jump.pressedNow(Key::W));
+    CHECK(fixture.transform().velocity.y > 0.0F);
+    CHECK_FALSE(fixture.state().jumping);
+}
+
 void testTheSpriteAndTheColliderShareTheTransformPosition()
 {
     // The course: "The player's sprite and bounding box are centered on the player's
@@ -1306,16 +1342,33 @@ void testReleasingTheJumpKeyWhileFallingDoesNotCancelTheFall()
 
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
-    // Hold past the apex so the player is on the way down.
+
+    // Hold past the apex and then keep falling, so the descent is **fast** before the
+    // key is released.
+    //
+    // The frame count matters. Releasing at the first downward velocity catches the
+    // player at 5 px/s, and at that speed the two behaviours are indistinguishable: the
+    // guard-less release sets the velocity to zero and gravity puts it back to 15 in the
+    // same frame, which is still "greater than 5". Letting the fall develop first makes
+    // it 300 px/s or so, against 15 after a cancelled descent, and there is no reading
+    // of that which confuses the two.
+    //
+    // 60 frames, because the arithmetic is worth writing down. The apex is reached at
+    // frame 27 (400 / 15), and landing is a further 26 frames after that, so the
+    // descent passes 300 px/s at about frame 47 and the floor arrives at about 53. A
+    // 40-frame window stopped at 200, which is still too close to 15 to tell the two
+    // behaviours apart; 60 comfortably reaches the threshold and still breaks before
+    // the player lands.
     for (int frame = 0; frame < 60; ++frame)
     {
         fixture.step(jump.held());
-        if (fixture.transform().velocity.y > 0.0F)
+        if (fixture.transform().velocity.y > 300.0F)
         {
             break;
         }
     }
-    CHECK(fixture.transform().velocity.y > 0.0F);
+    CHECK(fixture.transform().velocity.y > 300.0F);
+    CHECK_FALSE(fixture.state().grounded);
 
     // Now stop holding.
     //
@@ -1334,11 +1387,21 @@ void testReleasingTheJumpKeyWhileFallingDoesNotCancelTheFall()
     CHECK(fixture.transform().velocity.y > fallingAt);
 
     // And it keeps accelerating rather than hovering.
-    for (int frame = 0; frame < 10; ++frame)
+    //
+    // Two frames, not ten: at 300 px/s and 15 px/s per frame, ten frames of descent
+    // would carry the player onto the floor, and the velocity would then be zero
+    // because of the landing rather than because of the release. Two frames is +30,
+    // which is twice the 15 a cancelled descent would have had, so the claim survives
+    // without the player arriving anywhere.
+    for (int frame = 0; frame < 2; ++frame)
     {
         fixture.step(jump.idle());
     }
-    CHECK(fixture.transform().velocity.y > fallingAt + 100.0F);
+    CHECK(fixture.transform().velocity.y > fallingAt + 30.0F);
+
+    // And the fall is a *fall*: the player is well below the apex.
+    const float apex = kPlayerRestY - ((kLevelJumpSpeed * kLevelJumpSpeed) / (2.0F * kLevelGravity));
+    CHECK(fixture.playerY() > apex);
     CHECK(fixture.playerY() > kPlayerRestY - 200.0F);
 }
 
@@ -1916,6 +1979,7 @@ int main()
         // A. Spawn
         {"the player is spawned from level data", &testThePlayerIsSpawnedFromLevelData},
         {"the spawn position comes from the grid cell", &testTheSpawnPositionComesFromTheGridCell},
+        {"a freshly spawned player is not grounded", &testAFreshlySpawnedPlayerIsNotGrounded},
         {"the sprite and the collider share the transform position",
          &testTheSpriteAndTheColliderShareTheTransformPosition},
         {"the committed level spawns a player with those numbers",
