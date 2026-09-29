@@ -1878,39 +1878,55 @@ void testEveryDeclaredFrameCountDividesItsTexture()
     // prime. This group is the standing check that nobody has added it anyway.
     const fs::path base = shippedConfiguration().parent_path();
 
-    std::vector<std::pair<std::string, const engine::assets::AssetEntry*>> textureByName;
-    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    // ### The entries are held, not pointed at
+    //
+    // The first version of this group built a lookup of `const AssetEntry*` from
+    // `parseShippedConfiguration()`, which returns a vector **by value**. The pointers
+    // outlived nothing: the temporary was destroyed at the end of the full expression
+    // that produced the lookup, and every later read of an entry was a
+    // heap-use-after-free. AddressSanitizer caught it on the first sanitized run, in
+    // `std::string::__is_long` - which is to say it was caught while a `std::string` was
+    // asking whether it was short or long, on memory that had already been freed.
+    //
+    // So the lookup stores *values*: a name and the resolved path. Nothing here
+    // outlives a temporary, and there is no pointer to get wrong.
+    const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
+
+    std::vector<std::pair<std::string, fs::path>> textureByName;
+    for (const engine::assets::AssetEntry& entry : entries)
     {
         if (entry.type == engine::assets::AssetType::Texture)
         {
-            textureByName.emplace_back(entry.name, &entry);
+            textureByName.emplace_back(entry.name, base / entry.path);
         }
     }
 
     std::size_t checked = 0U;
-    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    for (const engine::assets::AssetEntry& entry : entries)
     {
         if (entry.type != engine::assets::AssetType::Animation)
         {
             continue;
         }
 
-        const engine::assets::AssetEntry* texture = nullptr;
+        fs::path texturePath;
+        bool found = false;
         for (const auto& [name, candidate] : textureByName)
         {
             if (name == entry.textureName)
             {
-                texture = candidate;
+                texturePath = candidate;
+                found = true;
             }
         }
 
-        CHECK(texture != nullptr);
-        if (texture == nullptr)
+        CHECK(found);
+        if (!found)
         {
             continue;
         }
 
-        const int width = pngWidth(base / texture->path);
+        const int width = pngWidth(texturePath);
         CHECK(width > 0);
         if (width <= 0)
         {
@@ -1918,13 +1934,14 @@ void testEveryDeclaredFrameCountDividesItsTexture()
         }
 
         ++checked;
-        if (static_cast<int>(entry.frameCount) != 0 && (width % static_cast<int>(entry.frameCount)) != 0)
+        const int frames = static_cast<int>(entry.frameCount);
+        if (frames != 0 && (width % frames) != 0)
         {
             std::cerr << "    animation '" << entry.name << "' declares " << entry.frameCount
                       << " frames but its texture is " << width << " px wide, and "
                       << width << " / " << entry.frameCount << " is not a whole number\n";
         }
-        CHECK(static_cast<int>(entry.frameCount) == 0 || (width % static_cast<int>(entry.frameCount)) == 0);
+        CHECK(frames == 0 || (width % frames) == 0);
     }
 
     // Every animation in the shipped file was actually checked, so the group cannot
