@@ -1036,6 +1036,36 @@ void testWalkingOffALedgeMakesThePlayerAirborne()
 // E. Jumping
 // ---------------------------------------------------------------------------
 
+void testTheJumpSpeedIsTheLevelsNotAConstant()
+{
+    // A level whose jump speed is not 400, because a test that only ever compares
+    // against 400 cannot tell "read the level" from "wrote 400". The committed level
+    // happens to say 400, so the mutation replacing the level's value with the literal
+    // 400 passed every other group in this file.
+    PlayerRecord record = playerRecordAt(0.0F, 1.0F);
+    record.jumpSpeed = 250.0F;
+    PlayerFixture fixture{levelWith(record)};
+    settle(fixture);
+
+    ActionDriver jump;
+    fixture.step(jump.pressedNow(Key::W));
+
+    CHECK_NEAR(fixture.transform().velocity.y, -250.0F, 0.0001F);
+    EXPECT_STATE(fixture, PlayerState::Air);
+
+    // And the peak follows the level's number, not the committed one: `v^2 / 2g` for
+    // 250 is 34.7 pixels, against 88.9 for 400.
+    float highest = fixture.playerY();
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        fixture.step(jump.held());
+        highest = std::min(highest, fixture.playerY());
+    }
+
+    const float expectedPeak = kPlayerRestY - ((250.0F * 250.0F) / (2.0F * kLevelGravity));
+    CHECK_NEAR(highest, expectedPeak, 3.5F);
+}
+
 void testTheJumpKeyLaunchesThePlayerAtTheLevelsJumpSpeed()
 {
     PlayerFixture fixture{wideFloorLevel()};
@@ -1065,19 +1095,47 @@ void testTheJumpOnlyWorksFromTheGround()
     // Jump.
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
-    const float afterJump = fixture.transform().velocity.y;
+    CHECK_NEAR(fixture.transform().velocity.y, -kLevelJumpSpeed, 0.0001F);
 
-    // Try to jump again, mid-air, three more times. Each is a *fresh press*, so this
-    // is not a held key - it is the harder case, and the one an `isActive` bug would
-    // also fail.
+    // Hold until the player is **falling**, because a mid-air jump cannot be observed
+    // while the player is still rising: a re-launch would set the velocity to -400 and
+    // gravity would immediately add 15, giving -385 - and so would a *missing* re-launch
+    // from a velocity of -385, giving the same -400... no, the same -385. The first
+    // version of this group compared velocities and passed with the grounded check
+    // deleted, because gravity's 15 dominated every comparison.
+    //
+    // Descending, the two are unmistakable: a re-launch sends the player *up*, and
+    // without one they keep going down. Position, not velocity.
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        fixture.step(jump.held());
+        if (fixture.transform().velocity.y > 0.0F)
+        {
+            break;
+        }
+    }
+    CHECK(fixture.transform().velocity.y > 0.0F);
+    CHECK_FALSE(fixture.state().grounded);
+
+    // Three fresh presses mid-descent. A fresh press, not a held key - the harder
+    // case, and the one an `isActive` bug would also fail.
     for (int attempt = 0; attempt < 3; ++attempt)
     {
+        const float before = fixture.playerY();
         ActionDriver again;
         fixture.step(again.pressedNow(Key::W));
-        // The velocity is not re-launched. Gravity is adding to it every frame, so it
-        // is *less* negative than the launch, never equal to the jump speed again.
-        CHECK(fixture.transform().velocity.y > afterJump);
-        CHECK(fixture.transform().velocity.y > -kLevelJumpSpeed + 1.0F);
+
+        // Still descending, on this very frame. A re-launch would have made the
+        // velocity negative and the player would have moved up.
+        CHECK(fixture.transform().velocity.y > 0.0F);
+        CHECK(fixture.playerY() > before);
+        EXPECT_STATE(fixture, PlayerState::Air);
+
+        // The `jumping` flag is deliberately **not** required to be clear here. It
+        // means "a jump this player started has not landed yet", and the descent is
+        // part of that jump's arc, so it stays set until touchdown. What the mid-air
+        // press must not do is add upward velocity, and the two checks above are
+        // exactly that.
     }
 }
 
@@ -1259,14 +1317,28 @@ void testReleasingTheJumpKeyWhileFallingDoesNotCancelTheFall()
     }
     CHECK(fixture.transform().velocity.y > 0.0F);
 
-    // Now stop holding. The descent must continue and accelerate.
+    // Now stop holding.
+    //
+    // The check is on **this** frame, not ten frames later. The rule only applies while
+    // ascending, so with the `velocity.y < 0` guard the release does nothing at all and
+    // gravity adds to the descent; without the guard the release zeroes a descent that
+    // is under way, and the fall has to re-accelerate from nothing. Ten frames later
+    // both have caught up, which is why the first version of this group passed with
+    // the guard deleted.
     const float fallingAt = fixture.transform().velocity.y;
     fixture.step(jump.release(Key::W));
+
+    // The descent was not interrupted: still moving down, and at least as fast as it
+    // was, plus this frame's gravity.
+    CHECK(fixture.transform().velocity.y > 0.0F);
+    CHECK(fixture.transform().velocity.y > fallingAt);
+
+    // And it keeps accelerating rather than hovering.
     for (int frame = 0; frame < 10; ++frame)
     {
         fixture.step(jump.idle());
     }
-    CHECK(fixture.transform().velocity.y > fallingAt);
+    CHECK(fixture.transform().velocity.y > fallingAt + 100.0F);
     CHECK(fixture.playerY() > kPlayerRestY - 200.0F);
 }
 
@@ -1310,6 +1382,60 @@ void testVariableJumpDoesNotChangeTheGlobalPhysicsBehaviour()
     const float expected = startY + (0.5F * kLevelGravity * ((frames * kFrame) * (frames * kFrame)));
     CHECK(falling.playerY() > expected - 1.0F);
     CHECK(falling.playerY() < expected + 4.0F);
+}
+
+void testADynamicBodyIsNotAFloor()
+{
+    // The course says the player "land on a **Tile** entity". A dynamic entity is not a
+    // tile, and the ground probe has to agree - otherwise a player would stand on a
+    // falling bullet, and the two would push each other forever.
+    //
+    // This is the only way the body-type half of the probe is observable, and it took
+    // a mutation that deleted the check to notice: with the committed level there is
+    // exactly one dynamic body, the player, and the probe skips the entity it is asking
+    // about, so every collider it looked at was already static and the check could not
+    // be reached. A check that cannot be reached is a check that does not exist.
+    //
+    // The arrangement: the player in the air, and a second **dynamic** box directly
+    // beneath it, with no floor in the world at all.
+    Level level = levelWith(playerRecordAt(0.0F, 4.0F), 0);
+    PlayerFixture fixture{level, 100000.0F};
+
+    // A dynamic body just below the player, in mid-air.
+    engine::ecs::Entity& crate = fixture.world().addEntity("crate");
+    crate.addComponent<Transform>(Transform{Vec2{fixture.playerX(), fixture.playerY() + 40.0F},
+                                            Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    crate.addComponent<Collider>(Collider{Vec2{40.0F, 40.0F}});
+    crate.addComponent<Body>(Body{engine::physics::BodyType::Dynamic});
+
+    // One frame. The player must still be falling: a dynamic body is not a floor.
+    fixture.step(ActionState{});
+
+    CHECK_FALSE(fixture.state().grounded);
+    EXPECT_STATE(fixture, PlayerState::Air);
+
+    // And over several frames it keeps descending past the dynamic body, rather than
+    // settling on it.
+    const float startY = fixture.playerY();
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        fixture.step(ActionState{});
+    }
+    CHECK(fixture.playerY() > startY);
+
+    // The complement, and it is what makes the group a test of the *body type* rather
+    // than of the probe generally: a **static** body in the same place is a floor.
+    PlayerFixture staticFixture{levelWith(playerRecordAt(0.0F, 4.0F), 0), 100000.0F};
+    engine::ecs::Entity& platform = staticFixture.world().addEntity("platform");
+    platform.addComponent<Transform>(Transform{Vec2{staticFixture.playerX(), staticFixture.playerY() + 40.0F},
+                                               Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    platform.addComponent<Collider>(Collider{Vec2{40.0F, 40.0F}});
+    platform.addComponent<Body>(Body{engine::physics::BodyType::Static});
+
+    staticFixture.step(ActionState{});
+    staticFixture.step(ActionState{});
+    CHECK(staticFixture.state().grounded);
+    EXPECT_STATE(staticFixture, PlayerState::Stand);
 }
 
 // ---------------------------------------------------------------------------
@@ -1814,6 +1940,7 @@ int main()
         {"landing returns to a grounded state", &testLandingReturnsToAGroundedState},
         {"walking off a ledge makes the player airborne", &testWalkingOffALedgeMakesThePlayerAirborne},
         // E. Jump
+        {"the jump speed is the level's, not a constant", &testTheJumpSpeedIsTheLevelsNotAConstant},
         {"the jump key launches the player at the level's jump speed",
          &testTheJumpKeyLaunchesThePlayerAtTheLevelsJumpSpeed},
         {"the jump only works from the ground", &testTheJumpOnlyWorksFromTheGround},
@@ -1829,6 +1956,7 @@ int main()
         {"variable jump does not change the global physics behaviour",
          &testVariableJumpDoesNotChangeTheGlobalPhysicsBehaviour},
         // G. Gravity
+        {"a dynamic body is not a floor", &testADynamicBodyIsNotAFloor},
         {"gravity accelerates the player downward", &testGravityAcceleratesThePlayerDownward},
         {"landing clears the downward velocity", &testLandingClearsTheDownwardVelocity},
         {"a grounded player carries no vertical speed", &testAGroundedPlayerCarriesNoVerticalSpeed},

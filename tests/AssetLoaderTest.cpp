@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
@@ -1644,6 +1645,51 @@ void testTheManagerSurvivesEveryDeclaredAssetBeingUsed()
 // declared file that will not load.
 // ---------------------------------------------------------------------------
 
+/// The width of a PNG in pixels, read from its IHDR chunk.
+///
+/// A PNG's layout is fixed: an 8-byte signature, then a 4-byte chunk length, the
+/// 4-byte type "IHDR", and then the width and height as big-endian 32-bit integers.
+/// So the width is the first four bytes at offset 16.
+///
+/// This exists so the divisibility check can run without constructing an asset
+/// manager. The manager is what *enforces* the rule by throwing, so using it to check
+/// the rule would mean the check could never run on a configuration that breaks it.
+[[nodiscard]] int pngWidth(const fs::path& path)
+{
+    std::ifstream file{path, std::ios::binary};
+    if (!file)
+    {
+        return 0;
+    }
+
+    std::array<unsigned char, 24U> header{};
+    file.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    if (!file || file.gcount() != static_cast<std::streamsize>(header.size()))
+    {
+        return 0;
+    }
+
+    // The signature and the chunk type, so a file that is not a PNG at all is reported
+    // as unreadable rather than as some arbitrary width.
+    static const unsigned char kSignature[8] = {0x89U, 'P', 'N', 'G', 0x0DU, 0x0AU, 0x1AU, 0x0AU};
+    for (std::size_t index = 0U; index < 8U; ++index)
+    {
+        if (header[index] != kSignature[index])
+        {
+            return 0;
+        }
+    }
+    if (std::string{reinterpret_cast<const char*>(&header[12]), 4U} != "IHDR")
+    {
+        return 0;
+    }
+
+    return static_cast<int>((static_cast<unsigned>(header[16]) << 24U) |
+                            (static_cast<unsigned>(header[17]) << 16U) |
+                            (static_cast<unsigned>(header[18]) << 8U) |
+                            static_cast<unsigned>(header[19]));
+}
+
 void testTheShippedConfigurationParses()
 {
     // Through the real parser, not a looser one. A configuration the loader would
@@ -1806,6 +1852,84 @@ void testDeclaringTheRunStripAsThreeFramesIsRejected()
     CHECK(manager.animationCount() == 1U);
     CHECK(manager.animation("megaman_megaRun_run").frameWidth() == 733);
     CHECK(manager.animation("megaman_megaRun_run").frameHeight() == 246);
+}
+
+void testEveryDeclaredFrameCountDividesItsTexture()
+{
+    // The frame-divisibility rule, checked on the **shipped configuration** and
+    // without constructing an asset manager.
+    ///
+    /// ### Why it reads the PNG header itself
+    ///
+    // The rule is enforced by the loader, and the loader is the thing that throws -
+    // so a configuration that breaks the rule cannot be checked through the loader at
+    // all: every suite that builds a manager aborts in its constructor, and the
+    // failure is a crash rather than an assertion. Reading the dimensions out of the
+    // file's own header means this group can *report* the violation.
+    ///
+    // A PNG's IHDR chunk holds the width and height as two big-endian 32-bit integers
+    // at byte 16. That is all this needs, and it is the same information the loader
+    // itself uses.
+    ///
+    /// ### Why it matters here
+    ///
+    // The player has three states and two pictures, because `megaman_megaRun` cannot
+    // be declared: 733 pixels, the course's 3 frames, 733 / 3 is 244.33, and 733 is
+    // prime. This group is the standing check that nobody has added it anyway.
+    const fs::path base = shippedConfiguration().parent_path();
+
+    std::vector<std::pair<std::string, const engine::assets::AssetEntry*>> textureByName;
+    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    {
+        if (entry.type == engine::assets::AssetType::Texture)
+        {
+            textureByName.emplace_back(entry.name, &entry);
+        }
+    }
+
+    std::size_t checked = 0U;
+    for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
+    {
+        if (entry.type != engine::assets::AssetType::Animation)
+        {
+            continue;
+        }
+
+        const engine::assets::AssetEntry* texture = nullptr;
+        for (const auto& [name, candidate] : textureByName)
+        {
+            if (name == entry.textureName)
+            {
+                texture = candidate;
+            }
+        }
+
+        CHECK(texture != nullptr);
+        if (texture == nullptr)
+        {
+            continue;
+        }
+
+        const int width = pngWidth(base / texture->path);
+        CHECK(width > 0);
+        if (width <= 0)
+        {
+            continue;
+        }
+
+        ++checked;
+        if (static_cast<int>(entry.frameCount) != 0 && (width % static_cast<int>(entry.frameCount)) != 0)
+        {
+            std::cerr << "    animation '" << entry.name << "' declares " << entry.frameCount
+                      << " frames but its texture is " << width << " px wide, and "
+                      << width << " / " << entry.frameCount << " is not a whole number\n";
+        }
+        CHECK(static_cast<int>(entry.frameCount) == 0 || (width % static_cast<int>(entry.frameCount)) == 0);
+    }
+
+    // Every animation in the shipped file was actually checked, so the group cannot
+    // pass by finding nothing to look at.
+    CHECK(checked == 11U);
 }
 
 void testEveryConfiguredPathExists()
@@ -2034,6 +2158,8 @@ int main()
          &testTheShippedConfigurationHasTheExpectedEntryCounts},
         {"declaring the run strip as three frames is rejected",
        &testDeclaringTheRunStripAsThreeFramesIsRejected},
+      {"every declared frame count divides its texture",
+       &testEveryDeclaredFrameCountDividesItsTexture},
       {"every configured path exists", &testEveryConfiguredPathExists},
         {"configured names are unique", &testConfiguredNamesAreUnique},
         {"the shipped configuration names every library file", &testTheShippedConfigurationNamesEveryLibraryFile},
