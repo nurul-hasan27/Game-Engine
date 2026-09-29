@@ -11,6 +11,13 @@ CMakeFiles/
 # macOS
 .DS_Store
 
+# Python bytecode
+# The mutation harnesses in tools/ are run directly; this is only there because
+# importing one to check it compiles leaves a .pyc behind, and committing a build
+# artifact is exactly the thing these harnesses exist to catch.
+__pycache__/
+*.pyc
+
 # Editors and IDEs
 .idea/
 .vscode/
