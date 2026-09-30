@@ -859,7 +859,27 @@ void testLandingCeilingAndSidePartitionEveryCollision()
                             Vec2{0.0F, -900.0F});
     Entity& runner = addBody(fixture.world(), "runner", Vec2{780.0F, 100.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic,
                              Vec2{600.0F, 0.0F});
+
+    // A bystander, far from every surface and touching nothing. It exists so the
+    // predicates can be asked about an entity that is in **no** collision, which is the
+    // only way the participant check is reachable: a `landedOn` that forgot to verify
+    // the caller would answer "yes, it landed" for this body about somebody else's
+    // collision, and a group that only ever asked about participants never sees it.
+    Entity& bystander = addBody(fixture.world(), "bystander", Vec2{2000.0F, 2000.0F}, Vec2{20.0F, 20.0F},
+                                BodyType::Dynamic);
     fixture.step();
+
+    // The premise: the bystander is in no collision at all.
+    CHECK(findCollisionWith(fixture.collisions(), bystander.id()) == nullptr);
+
+    // Asked about every collision in the frame, it is told it did not land, did not hit
+    // a ceiling and did not hit a side.
+    for (const Collision& collision : fixture.collisions().collisions())
+    {
+        CHECK_FALSE(landedOn(collision, bystander.id()));
+        CHECK_FALSE(hitCeilingWith(collision, bystander.id()));
+        CHECK_FALSE(hitSideWith(collision, bystander.id()));
+    }
 
     std::size_t landings = 0U;
     std::size_t ceilings = 0U;
@@ -932,6 +952,60 @@ void testLandingRequiresAStaticPartner()
     // So it falls through to "not a landing", which is the honest classification.
     CHECK(hitSideWith(*collision, faller.id()));
     static_cast<void>(platform);
+}
+
+void testABodyEmbeddedInASurfaceIsNotStandingOnIt()
+{
+    // The one configuration the `previousOverlap.y <= 0` clause of [landedOn] decides,
+    // and it is not something a level this engine can load.
+    //
+    // A body that was **already inside** a surface and is being pushed further in is not
+    // standing on it - it is stuck in it, and a landing that counted it would ground a
+    // body no player should ever be.
+    //
+    // The geometry is chosen so the minimum translation is vertical. The surface is very
+    // wide and very thin - 200 by 20 - so:
+    ///
+    //   penetration.x = 10 + 100 - 0 = 110
+    //   penetration.y = 10 +  10 - 5 =  15
+    //
+    // y is smaller, so the push is vertical. The body sits 5 above the surface's centre,
+    // so the push is upward - the same direction a real landing produces. And because it
+    // has not moved, its previous overlap *equals* its current one, which is positive:
+    // it was already inside.
+    //
+    // So four of the five landing clauses are satisfied and only
+    // `previousOverlap.y <= 0` refuses. Every other clause is redundant here, which is
+    // exactly why this group had to be written: the clause guards a case the other four
+    // cannot see, and a mutation removing it passed the entire suite until this
+    // arrangement existed.
+    PhysicsFixture fixture;
+    addBody(fixture.world(), "slab", Vec2{0.0F, 0.0F}, Vec2{200.0F, 20.0F}, BodyType::Static);
+    Entity& embedded = addBody(fixture.world(), "embedded", Vec2{0.0F, -5.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
+    fixture.step();
+
+    const Collision* collision = findCollisionWith(fixture.collisions(), embedded.id());
+    CHECK(collision != nullptr);
+    if (collision == nullptr)
+    {
+        return;
+    }
+
+    // The four clauses that are satisfied.
+    CHECK(collision->previousOverlap.x > 0.0F);
+    CHECK(collision->overlap.y > 0.0F);
+    CHECK(resolutionFor(*collision, embedded.id()).y < 0.0F);
+    CHECK(hasStaticPartner(*collision, embedded.id()));
+
+    // And the one that is not - so the body is not landed on, and is classified as
+    // something rather than as nothing.
+    CHECK(collision->previousOverlap.y > 0.0F);
+    CHECK_FALSE(landedOn(*collision, embedded.id()));
+    CHECK(hitSideWith(*collision, embedded.id()));
+
+    // It really was pushed upward, so this is the intended geometry rather than a body
+    // that was left alone.
+    CHECK(embedded.getComponent<Transform>().position.y < -5.0F);
 }
 
 void testAWallIsNotALanding()
@@ -1013,6 +1087,8 @@ int main()
         {"landing, ceiling and side partition every collision",
          &testLandingCeilingAndSidePartitionEveryCollision},
         {"landing requires a static partner", &testLandingRequiresAStaticPartner},
+        {"a body embedded in a surface is not standing on it",
+         &testABodyEmbeddedInASurfaceIsNotStandingOnIt},
         {"a wall is not a landing", &testAWallIsNotALanding},
     };
 
