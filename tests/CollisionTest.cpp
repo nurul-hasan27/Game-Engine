@@ -599,22 +599,50 @@ void testAnAbsentColliderIsReportedAsZeroOverlap()
 
 void testADestroyedEntityIsTreatedAsAbsent()
 {
-    // Deferred destruction: the entity is still in storage but not alive, and reading
-    // its components would be reading a corpse.
+    // ### A use-after-free that AddressSanitizer found in this very group
+    //
+    // The first version held the `Entity&` across the flush:
+    ///
+    ///     world.destroyEntity(doomed);
+    ///     world.update();
+    ///     CHECK_FALSE(doomed.isAlive());        // <-- reads freed memory
+    ///
+    // `destroyEntity` only marks the entity dead; `update` erases it from the `deque`,
+    // and a deque frees the whole block, so the reference is dangling from that moment.
+    // ASan reported a container-overflow in `Entity::isAlive` and aborted the suite.
+    //
+    // That is a defect in the test, not in the engine: deferred destruction is the
+    // documented contract, and holding a reference across the flush is exactly the
+    // mistake the contract warns about. The engine is right to let the read happen and
+    // wrong to have let my test do it.
+    //
+    // So the contract is asserted where it is meaningful - between the mark and the
+    // flush, when the object is still there - and the flush is then checked through the
+    // view, which is the only handle that is supposed to survive it.
     EntityManager world;
     Entity& solid = addBody(world, "solid", Vec2{0.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Static);
     Entity& doomed = addBody(world, "doomed", Vec2{0.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Static);
 
     // Alive, it overlaps.
     CHECK(getOverlap(solid, doomed).x > 0.0F);
+    CHECK(doomed.isAlive());
 
+    // Marked dead, not yet flushed: the object is still there, and the functions treat
+    // it as absent rather than reading a corpse.
     world.destroyEntity(doomed);
-    world.update();
-
     CHECK_FALSE(doomed.isAlive());
     CHECK_NEAR_VEC(getOverlap(solid, doomed), Vec2(0.0F, 0.0F));
     CHECK_NEAR_VEC(getPreviousOverlap(solid, doomed), Vec2(0.0F, 0.0F));
+
+    // The entity view already skips it, because it filters on `isAlive`.
+    CHECK(world.getEntities("doomed").begin() == world.getEntities("doomed").end());
+
+    // Flushed. `doomed` is not touched again from here - its storage is gone.
+    world.update();
+    CHECK(world.getEntities("doomed").begin() == world.getEntities("doomed").end());
+    CHECK(world.aliveEntityCount() == 1U);
 }
+
 
 void testARemovedColliderIsTreatedAsAbsent()
 {
@@ -693,22 +721,32 @@ void testTwoStaticBodiesAreNotRecorded()
 void testADestroyedEntityDoesNotSurviveIntoTheNextFrame()
 {
     // The lifetime rule: a record describes the frame that produced it, and a consumer
-    // that reads a stale one would ground a player who is in the air.
+    // reading a stale one would ground a player who is in the air.
+    //
+    // The id is copied out **before** the flush, for the reason
+    // `a destroyed entity is treated as absent` documents at length: `update` erases
+    // from a deque, so the `Entity` and everything reachable through it is freed, and
+    // `mover.id()` afterwards would be a read of freed memory. The id is a plain
+    // `std::uint64_t` and survives.
     PhysicsFixture fixture;
     addBody(fixture.world(), "wall", Vec2{0.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Static);
     Entity& mover = addBody(fixture.world(), "mover", Vec2{15.0F, 0.0F}, Vec2{20.0F, 20.0F}, BodyType::Dynamic);
+    const EntityId moverId = mover.id();
+
     fixture.step();
     CHECK(fixture.collisions().size() == 1U);
+    CHECK(findCollisionWith(fixture.collisions(), moverId) != nullptr);
 
-    // Teleport it away and destroy it. The next frame must not mention it.
+    // Teleport it away, then destroy it. The next frame must not mention it.
     mover.getComponent<Transform>().position = Vec2{900.0F, 900.0F};
     fixture.world().destroyEntity(mover);
     fixture.world().update();
     fixture.step();
 
     CHECK(fixture.collisions().empty());
-    CHECK(findCollisionWith(fixture.collisions(), mover.id()) == nullptr);
+    CHECK(findCollisionWith(fixture.collisions(), moverId) == nullptr);
 }
+
 
 void testTheReportIsEmptyBeforeAnythingHasRun()
 {
