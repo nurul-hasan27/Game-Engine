@@ -123,6 +123,7 @@ using engine::components::Player;
 using engine::components::PlayerConfig;
 using engine::components::PlayerState;
 using engine::components::Transform;
+using engine::physics::BodyType;
 using engine::ecs::Entity;
 using engine::ecs::EntityManager;
 using engine::ecs::SystemManager;
@@ -351,8 +352,8 @@ public:
         // manager stores systems through `unique_ptr` precisely so that registering
         // another does not move this one.
         m_systems.add<PlayerSystem>(fallLimitY);
-        const PhysicsSystem& physics = m_systems.add<PhysicsSystem>();
-        m_systems.add<engine::systems::PlayerStateSystem>(physics.collisions());
+        m_physics = &m_systems.add<PhysicsSystem>();
+        m_systems.add<engine::systems::PlayerStateSystem>(m_physics->collisions());
         m_systems.add<AnimationSystem>(m_assets);
 
         const LevelLoader loader{m_assets};
@@ -448,6 +449,16 @@ public:
     [[nodiscard]] EntityManager& world() noexcept { return m_world; }
     [[nodiscard]] const EntityManager& world() const noexcept { return m_world; }
     [[nodiscard]] SystemManager& systems() noexcept { return m_systems; }
+
+    /// The collisions the last step resolved, straight from the physics system.
+    ///
+    /// So a group can check that a landing *happened* as well as that the player ended
+    /// up grounded - the two are different claims, and a state assertion alone would
+    /// pass whether the player landed or was merely placed there.
+    [[nodiscard]] const engine::physics::CollisionReport& collisions() const noexcept
+    {
+        return m_physics->collisions();
+    }
     [[nodiscard]] const AssetManager& assets() const noexcept { return m_assets; }
 
     [[nodiscard]] float playerX() const { return transform().position.x; }
@@ -467,6 +478,10 @@ private:
     engine::assets::SfmlAssetManager m_assets;
     EntityManager m_world;
     SystemManager m_systems;
+
+    /// Not owned: it lives in `m_systems`, and `add` guarantees that registering another
+    /// system does not move it. Null only before the constructor body has run.
+    const PhysicsSystem* m_physics = nullptr;
 };
 
 /// The player's state as a word, for failure messages.
@@ -1963,6 +1978,393 @@ void testEveryAnimationThePlayerCanSelectIsADeclaredAsset()
 }
 
 // ---------------------------------------------------------------------------
+// Phase 17: the player answers collisions instead of guessing at them
+// ---------------------------------------------------------------------------
+
+void testLandingIsRecognisedOnTheFrameItHappens()
+{
+    // ### The Phase 16 limitation, and the observation that removes it
+    //
+    // Phase 16 detected the floor with a probe and read it at the *top* of the player
+    // system, before that frame's physics ran. So on the frame the player touched down,
+    // the probe was looking at the position the *previous* frame left behind - the
+    // player was still in the air - and it took one more frame for the answer to
+    // arrive. The observable consequence was a single frame of gravity applied after
+    // touchdown, so the vertical velocity was 900/60 = 15 on the frame after landing
+    // even though the player was standing still.
+    //
+    // Now the landing is read from the collisions the step just resolved, so the frame
+    // that lands the player is the frame that knows it. Asserted as the *absence* of
+    // that frame of gravity: after touchdown the vertical velocity is zero and stays
+    // zero, and `grounded` is true on the very frame it becomes true.
+    PlayerFixture fixture{wideFloorLevel()};
+    settle(fixture);
+
+    // Dropped from well above the floor, so the fall is unmistakable.
+    fixture.transform().position = Vec2{fixture.playerX(), kFloorTop - 400.0F};
+
+    int landedAt = -1;
+    for (int frame = 0; frame < 200; ++frame)
+    {
+        fixture.step(ActionState{});
+        if (fixture.state().grounded)
+        {
+            landedAt = frame;
+            break;
+        }
+        CHECK_FALSE(fixture.state().grounded);
+    }
+
+    CHECK(landedAt >= 0);
+    if (landedAt < 0)
+    {
+        return;
+    }
+
+    // Grounded on the landing frame, and a real landing was reported - not a player
+    // that happened to be placed there.
+    CHECK(fixture.state().grounded);
+    EXPECT_STATE(fixture, PlayerState::Stand);
+    const engine::physics::Collision* landing = nullptr;
+    for (const engine::physics::Collision& collision : fixture.collisions().collisions())
+    {
+        if (engine::physics::landedOn(collision, fixture.player().id()))
+        {
+            landing = &collision;
+        }
+    }
+    CHECK(landing != nullptr);
+
+    // **The assertion that is the point of the phase.** The impact velocity is already
+    // gone, on the landing frame, and no frame of gravity is applied afterwards.
+    CHECK_NEAR(fixture.transform().velocity.y, 0.0F, 0.0001F);
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        fixture.step(ActionState{});
+        CHECK(fixture.state().grounded);
+        CHECK_NEAR(fixture.transform().velocity.y, 0.0F, 0.0001F);
+    }
+
+    // And it never sank: the feet are on the floor, not a pixel into it.
+    CHECK_NEAR(fixture.playerY(), kPlayerRestY, 0.5F);
+}
+
+void testAStandingPlayerIsGroundedOnEverySingleFrame()
+{
+    // The resting-contact property, and the one that makes the whole design work.
+    //
+    // Gravity is applied every frame, so a standing player moves a quarter of a pixel
+    // down each frame, is pushed back out, and has a support collision on the record
+    // again. Every frame. If it were ever not grounded the flag would flicker, and a
+    // flickering grounded flag is a jump gate that opens and closes at random.
+    //
+    // Phase 16 could not make this claim: it detected a floor with a probe and a
+    // quarter-pixel tolerance, which is precisely the magic number this phase removed.
+    PlayerFixture fixture{wideFloorLevel()};
+    settle(fixture);
+
+    int ungroundedFrames = 0;
+    int supportCollisions = 0;
+    for (int frame = 0; frame < 300; ++frame)
+    {
+        fixture.step(ActionState{});
+        if (!fixture.state().grounded)
+        {
+            ++ungroundedFrames;
+        }
+        for (const engine::physics::Collision& collision : fixture.collisions().collisions())
+        {
+            if (engine::physics::landedOn(collision, fixture.player().id()))
+            {
+                ++supportCollisions;
+            }
+        }
+        CHECK_NEAR(fixture.playerY(), kPlayerRestY, 0.001F);
+    }
+
+    CHECK(ungroundedFrames == 0);
+    CHECK(supportCollisions == 300);
+    EXPECT_STATE(fixture, PlayerState::Stand);
+    CHECK_NEAR(fixture.transform().velocity.y, 0.0F, 0.0001F);
+}
+
+void testWalkingOffALedgeIsAirborneOnTheFrameItHappens()
+{
+    // The other half of the same property, and the one the probe made a frame late.
+    //
+    // With one floor tile the player walks off the end of it. On the frame their box no
+    // longer overlaps the tile there is no support collision, so they are airborne
+    // immediately - and the flag does not need a probe to notice the *absence* of
+    // something, which is what a probe is worst at.
+    PlayerFixture fixture{wideFloorLevel(2)};
+    settle(fixture);
+
+    ActionDriver driver;
+    int airborneAt = -1;
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        fixture.step(frame == 0 ? driver.pressedNow(Key::D) : driver.held());
+        if (airborneAt < 0 && !fixture.state().grounded)
+        {
+            airborneAt = frame;
+        }
+    }
+
+    CHECK(airborneAt >= 0);
+    EXPECT_STATE(fixture, PlayerState::Air);
+    // Airborne the instant the support stopped, and gravity is already acting.
+    CHECK(fixture.transform().velocity.y > 0.0F);
+}
+
+void testACeilingStopsAJumpWithoutGroundingThePlayer()
+{
+    // A floor tile at cell (0,0) and a ceiling tile at cell (0,3).
+    //
+    // The ceiling tile spans world y 768..832, and the player's top edge starts at 900,
+    // so the ceiling is 68 pixels above the player's head - well inside the 89 an
+    // uninterrupted jump reaches, which is what guarantees the jump is interrupted.
+    Level level = levelWith(playerRecordAt(0.0F, 1.0F), 1);
+    level.addTile(tileAt(0.0F, 3.0F, "mario_ground_tile"));
+    PlayerFixture fixture{level};
+    settle(fixture);
+
+    ActionDriver jump;
+    fixture.step(jump.pressedNow(Key::W));
+    EXPECT_STATE(fixture, PlayerState::Air);
+
+    // Hold the key so the jump would go as high as it can, and watch for the ceiling.
+    bool sawCeiling = false;
+    float highest = fixture.playerY();
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        fixture.step(jump.held());
+        highest = std::min(highest, fixture.playerY());
+
+        for (const engine::physics::Collision& collision : fixture.collisions().collisions())
+        {
+            if (!engine::physics::hitCeilingWith(collision, fixture.player().id()))
+            {
+                continue;
+            }
+            sawCeiling = true;
+            // A ceiling is never *also* a landing. The first version of this group
+            // asserted that of every collision over the whole arc, and it failed on the
+            // way back down - correctly, because by then the player really had landed on
+            // the floor. The claim is about one collision, not about the frame.
+            CHECK_FALSE(engine::physics::landedOn(collision, fixture.player().id()));
+        }
+    }
+
+    CHECK(sawCeiling);
+
+    // It never got through. The ceiling's underside is at 1024 - 3*64 = 832, so the
+    // player's top edge stopped there and its centre at 832 + 30 = 862.
+    //
+    // The band is narrow and both edges are derived rather than measured: above 850
+    // because an uninterrupted jump would have reached 930 - 89 = 841, and below 875
+    // because 862 is where the geometry puts it. A one-sided check would pass for a
+    // player that passed straight through the ceiling *and* for one that never rose.
+    const float stoppedAt = (kWorldHeight - (3.0F * kCell)) + 30.0F;
+    CHECK_NEAR(highest, stoppedAt, 4.0F);
+    CHECK(highest > 850.0F);
+    CHECK(highest < 875.0F);
+
+    // And it came back down to the floor rather than sticking to the ceiling.
+    for (int frame = 0; frame < 200; ++frame)
+    {
+        fixture.step(jump.idle());
+        if (fixture.state().grounded)
+        {
+            break;
+        }
+    }
+    CHECK(fixture.state().grounded);
+    CHECK_NEAR(fixture.playerY(), kPlayerRestY, 0.5F);
+    CHECK_NEAR(fixture.transform().velocity.y, 0.0F, 0.0001F);
+}
+
+
+void testAWallStopsHorizontalMovement()
+{
+    // A wide floor and a wall one tile tall at cell 3, so the player walks along the
+    // ground and into it. The claim here is narrow: the wall stops horizontal motion,
+    // the player ends up pressed against it rather than through it, and the collision is
+    // classified as a side.
+    Level level = levelWith(playerRecordAt(0.0F, 1.0F), 6);
+    level.addTile(tileAt(3.0F, 1.0F, "mario_ground_tile"));
+    level.addTile(tileAt(3.0F, 2.0F, "mario_ground_tile"));
+    PlayerFixture fixture{level};
+    settle(fixture);
+
+    ActionDriver driver;
+    bool sawWall = false;
+    for (int frame = 0; frame < 90; ++frame)
+    {
+        fixture.step(frame == 0 ? driver.pressedNow(Key::D) : driver.held());
+
+        for (const engine::physics::Collision& collision : fixture.collisions().collisions())
+        {
+            if (!engine::physics::hitSideWith(collision, fixture.player().id()))
+            {
+                continue;
+            }
+            sawWall = true;
+            // The wall is a wall: not a landing and not a ceiling. That is the whole
+            // classification claim, and it is per collision.
+            //
+            // Note what is *not* asserted here: that the player is airborne. They are
+            // standing on the floor while they hit this wall, so they are grounded -
+            // by the floor, not by the wall. The first version of this group asserted
+            // `!grounded` inside this branch and failed 100-odd times, because the floor
+            // was doing exactly what it should. Being grounded by the floor while
+            // touching a wall is correct, and the group below is the one that isolates
+            // a wall with nothing under it.
+            CHECK_FALSE(engine::physics::landedOn(collision, fixture.player().id()));
+            CHECK_FALSE(engine::physics::hitCeilingWith(collision, fixture.player().id()));
+        }
+    }
+
+    CHECK(sawWall);
+    // The velocity the wall opposed was zeroed, and the player is flush against it.
+    CHECK_NEAR(fixture.transform().velocity.x, 0.0F, 0.0001F);
+    CHECK_NEAR(fixture.playerX() + (fixture.collider().size.x * 0.5F), 3.0F * kCell, 1.0F);
+    // And it is still standing on the floor, not on the wall.
+    CHECK(fixture.state().grounded);
+    EXPECT_STATE(fixture, PlayerState::Stand);
+}
+
+void testAWallInMidAirDoesNotGroundThePlayer()
+{
+    // The isolated version, and the one the brief calls out: a wall collision must not
+    // move the player from Air to grounded.
+    //
+    // A column of tiles at cell 1, six cells tall and with **no floor anywhere**, so the
+    // player falls past the bottom of the world while drifting into it. Every collision
+    // they can have is with that wall, which removes the confound of a floor doing the
+    // grounding.
+    Level level = levelWith(playerRecordAt(0.0F, 6.0F), 0);
+    for (int row = 1; row <= 6; ++row)
+    {
+        level.addTile(tileAt(1.0F, static_cast<float>(row), "mario_ground_tile"));
+    }
+    PlayerFixture fixture{level, kWorldHeight};
+    fixture.step(ActionState{});
+
+    ActionDriver driver;
+    bool sawWall = false;
+    for (int frame = 0; frame < 90 && !sawWall; ++frame)
+    {
+        fixture.step(frame == 0 ? driver.pressedNow(Key::D) : driver.held());
+
+        for (const engine::physics::Collision& collision : fixture.collisions().collisions())
+        {
+            if (engine::physics::hitSideWith(collision, fixture.player().id()))
+            {
+                sawWall = true;
+            }
+        }
+        // Airborne the whole time, and never once reported as standing on anything.
+        CHECK_FALSE(fixture.state().grounded);
+        EXPECT_STATE(fixture, PlayerState::Air);
+    }
+
+    CHECK(sawWall);
+    CHECK_FALSE(fixture.state().grounded);
+    // Stopped dead against the wall, in mid-air.
+    CHECK_NEAR(fixture.transform().velocity.x, 0.0F, 0.0001F);
+    CHECK_NEAR(fixture.playerX() + (fixture.collider().size.x * 0.5F), kCell, 1.0F);
+    // Still falling, because a wall is not a floor.
+    CHECK(fixture.transform().velocity.y > 0.0F);
+}
+
+
+void testLandingWhileTouchingAWallIsStillALanding()
+{
+    // Two collisions on the same frame: the floor and the wall beside it. The floor is
+    // the one that answers "am I supported", and the wall must not be counted as a
+    // support - nor must its presence stop the floor being recognised.
+    //
+    // This is the case a "there exists some nearby entity" implementation gets wrong in
+    // both directions at once.
+    Level level = levelWith(playerRecordAt(0.0F, 1.0F), 1);
+    level.addTile(tileAt(1.0F, 1.0F, "mario_ground_tile"));
+    level.addTile(tileAt(1.0F, 2.0F, "mario_ground_tile"));
+    PlayerFixture fixture{level};
+    settle(fixture);
+
+    // The player stands on tile 0 with the wall of tiles immediately to its right, then
+    // walks into it while falling from a small height above the floor.
+    fixture.transform().position = Vec2{fixture.playerX(), kFloorTop - 100.0F};
+
+    ActionDriver driver;
+    bool sawBoth = false;
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        fixture.step(frame == 0 ? driver.pressedNow(Key::D) : driver.held());
+
+        std::size_t supports = 0U;
+        std::size_t sides = 0U;
+        for (const engine::physics::Collision& collision : fixture.collisions().collisions())
+        {
+            if (engine::physics::landedOn(collision, fixture.player().id()))
+            {
+                ++supports;
+            }
+            if (engine::physics::hitSideWith(collision, fixture.player().id()))
+            {
+                ++sides;
+            }
+        }
+        if (supports > 0U && sides > 0U)
+        {
+            sawBoth = true;
+            // Grounded, because the floor says so - the wall did not have to be counted.
+            CHECK(fixture.state().grounded);
+        }
+    }
+
+    CHECK(sawBoth);
+    CHECK(fixture.state().grounded);
+    EXPECT_STATE(fixture, PlayerState::Stand);
+}
+
+void testADynamicBodyIsNotAFloorAndAStaticOneIs()
+{
+    // The rule Phase 16 established with a probe, now expressed in collisions: the
+    // course says the player lands on a **Tile**, and a dynamic body is not a tile.
+    //
+    // The two halves are in one group because the contrast is the test. A player that
+    // lands on a dynamic box keeps falling; the same player landing on an identical
+    // static box stops. If the body's type were being ignored, both would land.
+    const auto landsOn = [](const BodyType surfaceType) {
+        Level level = levelWith(playerRecordAt(0.0F, 6.0F), 0);
+        PlayerFixture fixture{level, kWorldHeight};
+        Entity& surface = fixture.world().addEntity("surface");
+        surface.addComponent<Transform>(Transform{Vec2{fixture.playerX(), fixture.playerY() + 80.0F},
+                                                Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+        surface.addComponent<Collider>(Collider{Vec2{80.0F, 20.0F}});
+        surface.addComponent<Body>(Body{surfaceType});
+
+        for (int frame = 0; frame < 120; ++frame)
+        {
+            fixture.step(ActionState{});
+            if (surfaceType == BodyType::Static && fixture.state().grounded)
+            {
+                return true;
+            }
+            if (surfaceType == BodyType::Dynamic && fixture.playerY() > surface.getComponent<Transform>().position.y)
+            {
+                return false; // fell straight through
+            }
+        }
+        return false;
+    };
+
+    CHECK(landsOn(BodyType::Static));
+    CHECK_FALSE(landsOn(BodyType::Dynamic));
+}
+
+// ---------------------------------------------------------------------------
 // The update order
 // ---------------------------------------------------------------------------
 
@@ -2085,6 +2487,18 @@ int main()
         {"the player animation loops so it is never destroyed", &testThePlayerAnimationLoopsSoItIsNeverDestroyed},
         {"every animation the player can select is a declared asset",
          &testEveryAnimationThePlayerCanSelectIsADeclaredAsset},
+        // Phase 17: collisions
+        {"landing is recognised on the frame it happens", &testLandingIsRecognisedOnTheFrameItHappens},
+        {"a standing player is grounded on every single frame",
+         &testAStandingPlayerIsGroundedOnEverySingleFrame},
+        {"walking off a ledge is airborne on the frame it happens",
+         &testWalkingOffALedgeIsAirborneOnTheFrameItHappens},
+        {"a ceiling stops a jump without grounding the player", &testACeilingStopsAJumpWithoutGroundingThePlayer},
+        {"a wall stops horizontal movement", &testAWallStopsHorizontalMovement},
+        {"a wall in mid-air does not ground the player", &testAWallInMidAirDoesNotGroundThePlayer},
+        {"landing while touching a wall is still a landing", &testLandingWhileTouchingAWallIsStillALanding},
+        {"a dynamic body is not a floor and a static one is",
+         &testADynamicBodyIsNotAFloorAndAStaticOneIs},
         // The order
         {"player behaviour lands in the same frame as the input",
          &testPlayerBehaviourLandsInTheSameFrameAsTheInput},
