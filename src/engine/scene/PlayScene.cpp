@@ -10,6 +10,7 @@
 #include "engine/systems/AnimationSystem.hpp"
 #include "engine/systems/CameraSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
+#include "engine/systems/PlayerStateSystem.hpp"
 #include "engine/systems/PlayerSystem.hpp"
 
 #include <filesystem>
@@ -121,8 +122,10 @@ PlayScene::PlayScene(const SceneContext& context)
 {
     // Registration order is the update order, and every line below is load bearing.
     //
-    //   PlayerSystem     actions       -> intent, jump, gravity, state, respawn
-    //   PhysicsSystem    velocity      -> position, then collisions
+    //   PlayerSystem     actions       -> intent, jump, gravity, respawn
+    //   PhysicsSystem    velocity      -> position, then collisions, then reports
+    //                                     what overlapped and how it arrived
+    //   PlayerStateSystem that report  -> grounded, Stand/Run/Air, and the picture
     //   CameraSystem     target        -> camera position, *after* physics so it
     //                                     follows where the player ended up
     //   ZoomKeysSystem   zoom actions  -> camera zoom
@@ -154,7 +157,19 @@ PlayScene::PlayScene(const SceneContext& context)
     // level: a world four cells tall respawns the player sooner, and a magic number
     // in PlayerSystem would respawn them at the same place in every world.
     m_systems.add<engine::systems::PlayerSystem>(m_cellsTall * level::LevelGrid::kCellSize);
-    m_systems.add<engine::systems::PhysicsSystem>();
+
+    // `add` hands back a reference, and it stays valid: the system manager holds systems
+    // through `unique_ptr` precisely so that registering another one does not move this
+    // one. So the reconciliation can be given the physics system's own report rather
+    // than reaching for a global - two scenes in one process, or a test with two
+    // worlds, each see only their own collisions.
+    const engine::systems::PhysicsSystem& physics = m_systems.add<engine::systems::PhysicsSystem>();
+
+    // Immediately after physics, and that position is the phase. The player's `grounded`
+    // flag is read from the collisions this frame resolved, so registering it earlier
+    // would put it a frame behind and reintroduce exactly the lag the collision report
+    // exists to remove. See PlayerStateSystem's own documentation.
+    m_systems.add<engine::systems::PlayerStateSystem>(physics.collisions());
     m_systems.add<engine::systems::CameraSystem>(context.camera(), std::string{level::kPlayerTag});
     // Local class, not an engine one - see its own documentation above.
     m_systems.add<ZoomKeysSystem>(context.camera());

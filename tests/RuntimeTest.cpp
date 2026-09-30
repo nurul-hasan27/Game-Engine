@@ -157,7 +157,20 @@ static_assert(std::is_standard_layout_v<Transform>, "Transform must be standard 
 static_assert(std::is_trivially_destructible_v<Transform>, "Transform must be trivially destructible");
 
 // Still a plain data component: adding methods would break this.
-static_assert(sizeof(Transform) == sizeof(Vec2) * 3 + sizeof(float), "Transform must hold exactly the four fields");
+//
+// **Five** fields, not four. Phase 17 added `prevPosition`, which the course's
+// `CTransform` also carries and which `getPreviousOverlap` is defined in terms of -
+// Lecture 11 section 19: "`getPreviousOverlap()` performs the same calculation using
+// the entities' previous-frame positions."
+//
+// The count is a proxy for "no methods", so moving from four to five does not
+// weaken what this line is for. The three asserts above it are the real guards
+// against behaviour creeping in - an aggregate cannot have user-provided
+// constructors, and trivial copyability, standard layout and trivial
+// destructibility all fail the moment a method with a side effect appears. Had
+// `prevPosition` been implemented as a computed accessor rather than a field, those
+// three would have caught it and this one would not have needed to change.
+static_assert(sizeof(Transform) == sizeof(Vec2) * 4 + sizeof(float), "Transform must hold exactly the five fields");
 
 // ---------------------------------------------------------------------------
 // Time

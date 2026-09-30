@@ -47,6 +47,40 @@ struct Transform
     Vec2 velocity{0.0f, 0.0f};
     Vec2 scale{1.0f, 1.0f};
     float angle = 0.0f;
+
+    /// Where this body was immediately before the physics step that is running now.
+    ///
+    /// ### Why it is the **last** member, and that is load bearing
+    ///
+    /// This component is aggregate-initialised in roughly sixty places with four
+    /// values, and it must stay trivially copyable - `RenderTest` asserts that with a
+    /// `static_assert`. So it cannot gain a constructor that defaults this field to
+    /// `position`, the way the course's `CTransform` does it.
+    ///
+    /// Placing it first would therefore be a silent disaster: every one of those
+    /// four-value initialisations would assign its `velocity` to `prevPosition`. It
+    /// goes last so that they leave it at `{0, 0}` and nothing else changes.
+    ///
+    /// ### Why `{0, 0}` is nevertheless correct
+    ///
+    /// Because nothing reads this field before the physics step writes it.
+    /// [engine::systems::PhysicsSystem] does, in this order:
+    ///
+    /// ```text
+    ///   pass 1   prevPosition = position;            <-- always written first
+    ///            position    += velocity * deltaSeconds;
+    ///   pass 2   the collision pass reads prevPosition
+    /// ```
+    ///
+    /// So on the very first frame the uninitialised value is overwritten with the
+    /// real spawn position before the collision pass can look at it, and from then on
+    /// it is by construction "the position before *this* physics update".
+    ///
+    /// That is also why the write has to stay in pass 1 and ahead of the integration.
+    /// Moving it after the integration would make it "the position after last frame",
+    /// which is a different quantity, and every previous-frame overlap in the engine
+    /// would be wrong by one frame of movement without anything failing loudly.
+    Vec2 prevPosition{0.0f, 0.0f};
 };
 
 } // namespace engine::components

@@ -112,6 +112,75 @@ public:
         Vertical
     };
 
+    /// The distance between the two centres on x, and on y.
+    ///
+    /// Factored out because the penetration depth needs `|centre difference|` while
+    /// [overlapX] needs the shared extent, and writing the subtraction twice is how
+    /// the two come to disagree.
+    [[nodiscard]] constexpr float distanceX(const Aabb& other) const noexcept
+    {
+        const float delta = m_center.x - other.m_center.x;
+        return delta < 0.0F ? -delta : delta;
+    }
+
+    [[nodiscard]] constexpr float distanceY(const Aabb& other) const noexcept
+    {
+        const float delta = m_center.y - other.m_center.y;
+        return delta < 0.0F ? -delta : delta;
+    }
+
+    /// The per-axis **penetration depth**: how far each axis must be pushed to make
+    /// the two boxes touch, and how negative it is when they are apart.
+    ///
+    /// ```text
+    ///   penetration.x == (thisHalfX + otherHalfX) - |thisCentreX - otherCentreX|
+    ///   penetration.y == (thisHalfY + otherHalfY) - |thisCentreY - otherCentreY|
+    /// ```
+    ///
+    /// ### This is the course's `getOverlap`, and it is not [overlapX]
+    ///
+    /// The course's Assignment 3 reference computes exactly the expression above
+    /// (`Physics::GetOverlap`), and Lecture 11 section 19 names it `getOverlap()`.
+    /// The lecture adds that the previous-frame version matters "because collision
+    /// resolution often needs to know **how the entities arrived at the current
+    /// overlap**" - which is a statement about translation, not about shared area.
+    ///
+    /// [overlapX] answers a different question: *how much of the x axis do these two
+    /// boxes share*. The two agree for separated boxes, for boxes that exactly touch,
+    /// and for boxes that partially overlap. They part company as soon as one box
+    /// sticks out past the other - that is, whenever one is **contained** in the
+    /// other on that axis - because the shared extent saturates at the smaller box's
+    /// width while the penetration depth keeps growing.
+    ///
+    /// A concrete pair, both boxes centred on x = 0:
+    ///
+    /// ```text
+    ///   this   20 wide   (half 10)
+    ///   other   6 wide   (half 3)   centred at x = 4
+    ///
+    ///   overlapX    = 3 - (-3)      = 6    the shared extent
+    ///   penetration = (10 + 3) - 4  = 9    the push that actually separates them
+    /// ```
+    ///
+    /// Pushing by 6 would leave them overlapping by 3, so using [overlapX] as a
+    /// translation is wrong for a contained box - and [minimumTranslation] used to do
+    /// exactly that, while documenting itself as "the offset that would push **this**
+    /// box out of `other`". Both now use this function, so the axis chosen and the
+    /// distance pushed along it come from one number.
+    ///
+    /// ### The sign convention, which is the course's and is not clamped
+    ///
+    /// Positive means the boxes overlap by that much on that axis. Zero means they
+    /// exactly touch. **Negative** means they are apart, and its magnitude is the
+    /// gap. It is deliberately not clamped at zero: [overlaps] is the predicate for
+    /// "do they touch at all", and a clamped value would make "separated by 40" and
+    /// "exactly touching" indistinguishable.
+    [[nodiscard]] constexpr Vec2 penetration(const Aabb& other) const noexcept
+    {
+        return Vec2{(m_halfExtents.x + other.m_halfExtents.x) - distanceX(other),
+                    (m_halfExtents.y + other.m_halfExtents.y) - distanceY(other)};
+    }
+
     /// The axis of least penetration, and the depth along it.
     ///
     /// Resolution happens on the axis with the **smaller** overlap, so a body
@@ -127,7 +196,11 @@ public:
             return PenetrationAxis::None;
         }
 
-        return overlapX(other) < overlapY(other) ? PenetrationAxis::Horizontal : PenetrationAxis::Vertical;
+        // [penetration], not [overlapX]/[overlapY]. The axis and the distance pushed
+        // along it have to come from the same number, or a contained box can pick an
+        // axis from one basis and be pushed by a distance derived from the other.
+        const Vec2 depth = penetration(other);
+        return depth.x < depth.y ? PenetrationAxis::Horizontal : PenetrationAxis::Vertical;
     }
 
     /// The minimum translation vector: the offset that would push **this** box
@@ -142,8 +215,9 @@ public:
     /// correct for both orientations of the same pair.
     [[nodiscard]] constexpr Vec2 minimumTranslation(const Aabb& other) const noexcept
     {
-        const float horizontal = overlapX(other);
-        const float vertical = overlapY(other);
+        const Vec2 depth = penetration(other);
+        const float horizontal = depth.x;
+        const float vertical = depth.y;
 
         if (horizontal < vertical)
         {

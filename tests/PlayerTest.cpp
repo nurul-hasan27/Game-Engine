@@ -58,6 +58,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/systems/AnimationSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
+#include "engine/systems/PlayerStateSystem.hpp"
 #include "engine/systems/PlayerSystem.hpp"
 
 #include <SFML/Graphics/RenderWindow.hpp>
@@ -340,10 +341,18 @@ public:
         : m_assets{std::filesystem::path{engine::config::kAssetsConfig}}
     {
         // The production order, minus the camera and the zoom keys, which need a
-        // camera this fixture has no use for. `PlayerSystem` first is the part that
-        // matters and it is the part that is kept.
+        // camera this fixture has no use for. All four of the rest are kept, and the
+        // two that Phase 17 changed the order of are the interesting ones:
+        // `PlayerSystem` still comes first so its velocity is integrated this frame,
+        // and `PlayerStateSystem` comes straight after physics so `grounded` is read
+        // from the frame's own collisions rather than the previous frame's.
+        //
+        // `add` hands back a reference, and the reference is safe to keep: the system
+        // manager stores systems through `unique_ptr` precisely so that registering
+        // another does not move this one.
         m_systems.add<PlayerSystem>(fallLimitY);
-        m_systems.add<PhysicsSystem>();
+        const PhysicsSystem& physics = m_systems.add<PhysicsSystem>();
+        m_systems.add<engine::systems::PlayerStateSystem>(physics.collisions());
         m_systems.add<AnimationSystem>(m_assets);
 
         const LevelLoader loader{m_assets};
@@ -487,6 +496,27 @@ void expectState(const PlayerFixture& fixture, const PlayerState expected, const
 }
 
 #define EXPECT_STATE(fixture, expected) expectState((fixture), (expected), __FILE__, __LINE__)
+
+/// The vertical velocity a jump leaves behind, after the step that integrated it.
+///
+/// ### Why this is arithmetic and not `-jumpSpeed`
+///
+/// Gravity is applied **every** frame now, including the frame the jump launches,
+/// because withholding it while grounded is mutually exclusive with detecting support
+/// from a real collision - see the note in [engine::systems::PlayerSystem]. So the
+/// launch velocity is the level's jump speed less exactly one frame of gravity, and
+/// the honest assertion is that difference.
+///
+/// Writing it as arithmetic rather than as `-400.0F` is the point: it says "the
+/// level's jump speed, minus this frame's gravity", so a jump that ignored
+/// [engine::components::PlayerConfig] and used a literal 400 would still pass, but a
+/// jump that ignored *gravity* on the launch frame would not. The Phase 16 version of
+/// this assertion pinned the withheld-gravity artefact, and passing with the gravity
+/// removed would have been the bug it could not see.
+[[nodiscard]] float launchVelocity(const float jumpSpeed)
+{
+    return -jumpSpeed + (kLevelGravity * kFrame);
+}
 
 /// Settles the player onto the floor.
 ///
@@ -1017,8 +1047,16 @@ void testTheJumpFrameIsAirborneImmediately()
 
     EXPECT_STATE(fixture, PlayerState::Air);
     CHECK(fixture.state().jumping);
-    // The probe has not caught up yet, which is precisely the case being tested.
-    CHECK(fixture.state().grounded);
+
+    // And `grounded` is **false** on the launch frame, which is the Phase 16
+    // limitation this phase removed.
+    //
+    // That group used to assert the opposite - that the probe still found the tile
+    // being left, so the player was "grounded" and the standing sprite showed for one
+    // frame at the bottom of every jump. `jumping` is what papered over it. Now the
+    // player is genuinely unsupported the moment they leave the tile, because that is
+    // what "no support collision was resolved this frame" means, and the assertion
+    // below is the removal of the workaround rather than a change of expectation.
 }
 
 void testLandingReturnsToAGroundedState()
@@ -1086,7 +1124,7 @@ void testTheJumpSpeedIsTheLevelsNotAConstant()
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
 
-    CHECK_NEAR(fixture.transform().velocity.y, -250.0F, 0.0001F);
+    CHECK_NEAR(fixture.transform().velocity.y, launchVelocity(250.0F), 0.0001F);
     EXPECT_STATE(fixture, PlayerState::Air);
 
     // And the peak follows the level's number, not the committed one: `v^2 / 2g` for
@@ -1113,7 +1151,7 @@ void testTheJumpKeyLaunchesThePlayerAtTheLevelsJumpSpeed()
     // The level's jump speed, upward, which in this engine is negative Y. Stated
     // against the level's own number rather than against `config.jumpSpeed` read
     // through the component, so this cannot pass by comparing a value with itself.
-    CHECK_NEAR(fixture.transform().velocity.y, -kLevelJumpSpeed, 0.0001F);
+    CHECK_NEAR(fixture.transform().velocity.y, launchVelocity(kLevelJumpSpeed), 0.0001F);
     EXPECT_STATE(fixture, PlayerState::Air);
     CHECK(fixture.state().jumping);
 
@@ -1131,7 +1169,7 @@ void testTheJumpOnlyWorksFromTheGround()
     // Jump.
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
-    CHECK_NEAR(fixture.transform().velocity.y, -kLevelJumpSpeed, 0.0001F);
+    CHECK_NEAR(fixture.transform().velocity.y, launchVelocity(kLevelJumpSpeed), 0.0001F);
 
     // Hold until the player is **falling**, because a mid-air jump cannot be observed
     // while the player is still rising: a re-launch would set the velocity to -400 and
@@ -1246,7 +1284,7 @@ void testAGroundedPlayerCannotJumpFromTheAir()
     // A second, separate press, after the landing.
     ActionDriver second;
     fixture.step(second.pressedNow(Key::W));
-    CHECK_NEAR(fixture.transform().velocity.y, -kLevelJumpSpeed, 0.0001F);
+    CHECK_NEAR(fixture.transform().velocity.y, launchVelocity(kLevelJumpSpeed), 0.0001F);
     EXPECT_STATE(fixture, PlayerState::Air);
 }
 
@@ -1302,7 +1340,7 @@ void testReleasingTheJumpKeyStopsTheAscentImmediately()
 
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
-    CHECK_NEAR(fixture.transform().velocity.y, -kLevelJumpSpeed, 0.0001F);
+    CHECK_NEAR(fixture.transform().velocity.y, launchVelocity(kLevelJumpSpeed), 0.0001F);
 
     // Hold for a few frames so the player is genuinely climbing...
     for (int frame = 0; frame < 5; ++frame)
@@ -1635,7 +1673,16 @@ void testNoStaleJumpStateSurvivesARespawn()
     // again and respawn forever.
     PlayerFixture fixture{wideFloorLevel()};
 
-    // Get genuinely airborne first, so the state is Air with a live jump.
+    // Settled first, and that is now a precondition rather than a convenience.
+    //
+    // A freshly spawned player is airborne - the loader says so honestly - so the jump
+    // gate refuses the press on the very first frame, correctly. Phase 16 got away
+    // with jumping on frame 1 because its *probe* had already found the floor by then;
+    // collision-based grounding has no such shortcut, and pretending otherwise would
+    // have meant reintroducing one.
+    settle(fixture);
+
+    // Get genuinely airborne, so the state is Air with a live jump.
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
     EXPECT_STATE(fixture, PlayerState::Air);
@@ -1670,7 +1717,7 @@ void testARespawnedPlayerCanJumpImmediately()
 
     ActionDriver jump;
     fixture.step(jump.pressedNow(Key::W));
-    CHECK_NEAR(fixture.transform().velocity.y, -kLevelJumpSpeed, 0.0001F);
+    CHECK_NEAR(fixture.transform().velocity.y, launchVelocity(kLevelJumpSpeed), 0.0001F);
     EXPECT_STATE(fixture, PlayerState::Air);
 }
 
@@ -1691,8 +1738,8 @@ void testTheFallLimitIsTheWorldsBottomEdge()
     }
 
     // `PlayerSystem` is first, and its fall limit is the world height in pixels.
-    CHECK(play->systems().systemCount() == 5U);
-    if (play->systems().systemCount() != 5U)
+    CHECK(play->systems().systemCount() == 6U);
+    if (play->systems().systemCount() != 6U)
     {
         return;
     }
