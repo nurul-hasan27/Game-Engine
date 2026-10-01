@@ -64,15 +64,17 @@ enum class TileType
 ///
 /// ### Two fields rather than one
 ///
+/// /// Two fields rather than one
+///
 /// [type](Tile.hpp) answers "what is this tile?" and [activated](Tile.hpp) answers "has it
 /// already done the one thing it does?".
 ///
 /// They are separate because they answer different questions and a single enum cannot
 /// carry both. A question block that has been used is still a question block - the course's
-/// `Question2` artwork is a used block, not a different kind of thing - so collapsing
-/// "used" into the type would mean the type no longer described what the tile *is*. And a
-/// brick keeps its `Brick` type for its whole life, including while its explosion plays;
-/// what changes is that it is no longer solid, which the absence of its
+/// `Question2` artwork is a used block, not a different kind of thing - so collapsing "used"
+/// into the type would mean the type no longer described what the tile *is*. And a brick
+/// keeps its `Brick` type for its whole life, including while its explosion plays; what
+/// changes is that it is no longer solid, which the absence of its
 /// [engine::components::Collider] already says.
 ///
 /// [activated](Tile.hpp) exists for the case both of the others cannot express: **two
@@ -81,10 +83,23 @@ enum class TileType
 /// overlap the same block on consecutive frames while it is being pushed out of it.
 /// Without this flag, either of those restarts the explosion and spawns a second coin.
 ///
-/// With it, activation is idempotent by construction: the first record flips the flag and
-/// every later one in the same frame - and every frame afterwards - finds it already set.
-/// That is a smaller and more reliable rule than any "have I handled this already"
-/// bookkeeping, because there is nothing to keep in step.
+/// [activated](Tile.hpp) exists for the case both of the others cannot express: **activation
+/// happening more than once**.
+///
+/// For a question block it is the whole defence. A used block deliberately keeps its
+/// collider - resizing or removing it would change the level's geometry under the player -
+/// so the player underneath produces a fresh ceiling hit on every frame it bounces, and
+/// without the flag every one of those frames would drop another coin.
+///
+/// For a brick the collider removal already makes a second activation unreachable, because a
+/// brick with no collider is not in [engine::systems::PhysicsSystem]'s query. It sets the flag
+/// anyway, because "what has this tile already done" is a question about the tile rather than
+/// about the behaviour it was doing, and one mechanism is smaller than two.
+///
+/// Either way it is idempotent by construction: the first record flips the flag and every
+/// later one - in the same frame and in every frame after - finds it already set. That is a
+/// smaller and more reliable rule than any "have I handled this already" bookkeeping, because
+/// there is nothing to keep in step.
 struct Tile
 {
     /// What this tile is. See [TileType](Tile.hpp).

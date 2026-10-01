@@ -98,13 +98,17 @@ mutation(
 
 mutation(
     "shoot-never-fires",
-    "Nothing is ever created, whatever the player does with Space.",
-    "combat_test: every shooting group, plus the two that fire a bullet to break a brick.",
+    "The shoot action is refused, so nothing is ever created whatever the player does.",
+    "combat_test: every shooting group, plus the two that fire a bullet to break a brick.\n"
+    "\n"
+    "Written as a **negated** guard rather than as a second copy of the same one: the first "
+    "version of this mutation added a duplicate `if (wasPressed) return;` immediately after the "
+    "original, which changed nothing at all and came out UNDETECTED. A mutation that is a "
+    "no-op is worse than no mutation, because it looks like coverage.",
     [patch(SHOOT_C,
            "    if (!actions.wasPressed(Action::Shoot))\n    {\n        return;\n    }",
-           "    if (!actions.wasPressed(Action::Shoot))\n    {\n        return;\n    }\n\n"
-           "    if (!actions.wasPressed(Action::Shoot))\n    {\n        return;\n    }\n"
-           "    // MUTATION: the press never reaches the spawn\n")],
+           "    if (actions.wasPressed(Action::Shoot)) // MUTATION: the press is refused\n    {\n"
+           "        return;\n    }")],
 )
 
 mutation(
@@ -310,7 +314,7 @@ mutation(
     "every case these fixtures contain.",
     [patch(TILE_C,
            "/// Whether anything in `pairs` names `id` as the thing that was hit from below.",
-           "[[nodiscard]] Vec2 bulletSize(const Entity& bullet)\n{\n"
+           "[[nodiscard]] Vec2 bulletBoxSize(const Entity& bullet)\n{\n"
            "    const Collider* const collider = bullet.tryGetConstComponent<Collider>();\n"
            "    return collider != nullptr ? collider->size : Vec2{0.0F, 0.0F};\n"
            "}\n\n"
@@ -337,17 +341,17 @@ mutation(
            "        // MUTATION: a proximity test instead of the report. It agrees with the\n"
            "        // physics step on every case these fixtures contain, which is exactly\n"
            "        // why it is dangerous and exactly why one group looks at the report.\n"
-           "        const Aabb bulletBox{transform.position, bulletSize(entity)};\n"
+           "        const engine::physics::Aabb bulletBox{transform.position, bulletBoxSize(entity)};\n"
            "        for (const Entity& other : entities.getEntities())\n"
            "        {\n"
            "            const Collider* const collider = other.tryGetConstComponent<Collider>();\n"
            "            const Transform* const at = other.tryGetConstComponent<Transform>();\n"
            "            if (collider == nullptr || at == nullptr || other.id() == entity.id() ||\n"
-           "                !other.hasComponent<components::Tile>())\n"
+           "                !other.hasComponent<Tile>())\n"
            "            {\n"
            "                continue;\n"
            "            }\n\n"
-           "            if (bulletBox.overlaps(Aabb{at->position, collider->size}))\n"
+           "            if (bulletBox.overlaps(engine::physics::Aabb{at->position, collider->size}))\n"
            "            {\n"
            "                bulletHits.push_back(Pair{entity.id(), other.id()});\n"
            "                struck = true;\n"
@@ -563,25 +567,21 @@ mutation(
 mutation(
     "brick-activation-is-never-marked",
     "`activated` is never set on a brick, so nothing records that it has already exploded.",
-    "PROVEN EQUIVALENT for a brick, and the reason is worth stating because it is a property "
-    "of the design rather than of the tests.\n"
+    "combat_test: 'a bullet hitting a brick starts the explosion and destroys the bullet' and "
+    "'the player hitting a brick from below starts the explosion', both of which read the flag "
+    "back off the tile that exploded.\n"
     "\n"
-    "The brick's collider is removed the instant it explodes, so the brick leaves "
-    "[engine::systems::PhysicsSystem]'s query and can never produce another collision record. "
-    "There is no path by which anything reaches a brick twice, in one frame or across frames, "
-    "so the flag's value on a brick is never read. It is read on a *question* block, whose "
-    "collider deliberately stays - which is why the flag lives on [engine::components::Tile] "
-    "rather than on the brick, and why `brick-activation-is-never-marked` here is separated "
-    "from the question-block mutation that does get caught.",
+    "This mutation was written expecting to be a **proven equivalence**, on the argument that a "
+    "brick removes its collider the instant it explodes and so can never be hit twice. That "
+    "argument is right about the *behaviour* and wrong about the *test*: the flag is the piece "
+    "of state the whole idempotency argument rests on, and reading it back is exactly what a "
+    "component is for. The behavioural groups - 'a bullet hitting a brick twice does not "
+    "restart the explosion' and 'the used block stays used' - are what prove the guarantee; "
+    "this one only proves the flag was set, which is a weaker and separate claim.",
     [patch(TILE_C,
            "void startExplosion(Entity& brick, Animation& animation, Tile& tile)\n{\n    tile.activated = true;",
            "void startExplosion(Entity& brick, Animation& animation, Tile& tile)\n{\n"
            "    static_cast<void>(tile); // MUTATION: never marked")],
-    equivalent="A brick removes its collider the moment it explodes, so it leaves the physics "
-               "step's query and can never produce a second collision record. Nothing reads "
-               "`activated` on a brick, so the removal changes no behaviour. The flag is kept "
-               "because it is the question block - which keeps its collider - that needs it, "
-               "and it is shared precisely so the two do not need two mechanisms.",
 )
 
 mutation(
@@ -729,7 +729,7 @@ mutation(
            "    coin.addComponent<Lifetime>(Lifetime{kCoinLifetimeFrames});\n"
            "    // MUTATION: a coin you could stand on\n"
            "    coin.addComponent<Collider>(Collider{Vec2{16.0F, 16.0F}});\n"
-           "    coin.addComponent<Body>(Body{BodyType::Static});")],
+           "    coin.addComponent<components::Body>(components::Body{physics::BodyType::Static});")],
 )
 
 mutation(
@@ -779,16 +779,26 @@ mutation(
 
 mutation(
     "lifetime-destroys-on-the-first-frame",
-    "An entity is destroyed as soon as it has a lifetime at all, whatever the count says.",
+    "Every entity carrying a lifetime is destroyed the frame it is seen, whatever the count "
+    "says.",
     "combat_test: every shooting and collision group - a bullet is gone before it can move - "
     "and every coin group.\n"
     "\n"
-    "The opposite end of `lifetime-destroys-a-frame-early`, and it is here because a countdown "
-    "with no lower bound is the mistake a person makes when they move the destruction into the "
-    "wrong place in the loop.",
+    "The opposite end of `lifetime-destroys-a-frame-early`, and here because a countdown with "
+    "its destruction condition replaced by an unconditional one is the mistake a person makes "
+    "when they move the line into the wrong place in the loop.\n"
+    "\n"
+    "The first version of this mutation removed the zero guard instead, which is not a "
+    "different mutation at all - it is `lifetime-guard-is-removed` again, and it came out "
+    "UNDETECTED because the guard is unreachable. Duplicating an equivalence under a second "
+    "name is how a harness ends up with two mutations and one fact.",
     [patch(LIFETIME_C,
-           "        if (lifetime.remainingFrames == 0U)\n        {\n            continue;\n        }\n\n        --lifetime.remainingFrames;",
-           "        --lifetime.remainingFrames; // MUTATION: no lower bound")],
+           "        // Exactly on reaching zero, and not before. `remainingFrames` counts the frame it is\n"
+           "        // on, so an entity with 30 spends frame one at 30, frame thirty at 1, and is\n"
+           "        // destroyed during the frame that takes it from 1 to 0.\n"
+           "        if (lifetime.remainingFrames == 0U)",
+           "        // MUTATION: destroyed whatever the count says\n"
+           "        if (lifetime.remainingFrames < 1000U)")],
 )
 
 mutation(

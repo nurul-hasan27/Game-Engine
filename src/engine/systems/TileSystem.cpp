@@ -301,13 +301,21 @@ void TileSystem::update(EntityManager& entities, const engine::input::ActionStat
 
     // ---- 3. The tiles -------------------------------------------------------------
     //
-    // One walk, and every tile is visited once, which is what makes activation idempotent
-    // for free: however many records in this frame name the same brick - a bullet that
-    // overlaps two bricks at once, or a player whose box still touches a block it has just
-    // been pushed out of - the block is seen once and started once.
+    // One walk, and every tile is visited once. That is the first half of idempotent
+    // activation, and it is the half that costs nothing: however many records in this frame
+    // name the same block, the block is seen once and started once.
     //
-    // [engine::components::Tile]'s `activated` then carries that guarantee across frames,
-    // which is the only reason it exists.
+    // [engine::components::Tile]'s `activated` is the second half, and it carries the
+    // guarantee across **frames** - which is where it earns its keep. A question block keeps
+    // its collider after it is used, on purpose, so the player standing underneath it produces
+    // a fresh ceiling hit every frame it bounces; without the flag every one of those frames
+    // would drop another coin.
+    //
+    // A brick needs it less: its collider comes off the instant it explodes, so it leaves
+    // [engine::systems::PhysicsSystem]'s query and nothing can reach it again. The flag is on
+    // the component rather than on the brick precisely so the two share one mechanism, and
+    // both set it, because "what has this tile already done" is a question about the tile and
+    // not about the behaviour it was doing.
     std::vector<Vec2> coinSpawns;
 
     for (auto&& [entity, transform, animation, tile] : entities.query<Transform, Animation, Tile>())
