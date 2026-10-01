@@ -5,6 +5,7 @@
 #include "engine/components/Collider.hpp"
 #include "engine/components/Player.hpp"
 #include "engine/components/PlayerConfig.hpp"
+#include "engine/components/Tile.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/physics/Aabb.hpp"
 
@@ -63,6 +64,37 @@ constexpr std::string_view kPlayerStandAnimation = "megaman_megaStand_stand";
 [[nodiscard]] components::Animation loopingAnimation(std::string animationName) noexcept
 {
     return components::Animation{std::move(animationName), 0U, 0U, true, false};
+}
+
+/// The gameplay tile a level's animation name asks for.
+///
+/// A three-line call, and the whole of the classification lives behind it.
+///
+/// ### Why this is here and not in the collision systems
+///
+/// The course says *"Tiles have different behavior depending on which Animation they
+/// are given"* - a brick explodes, a question block changes - and its own sample
+/// identifies a brick by comparing the animation's name to a string. So the
+/// information genuinely only exists as a name in the level file, and *somewhere* it
+/// has to become something a system can branch on.
+///
+/// This is that somewhere, and it is here for two reasons:
+///
+/// - It runs **once**, at spawn. Every gameplay system reads
+///   [engine::components::Tile] and never compares a string, so no amount of
+///   re-typing the comparison can produce a different answer in a different place.
+/// - The loader is the only thing that already maps a level's names onto things.
+///   It resolves the animation through the asset manager, it chooses the anchor and
+///   it knows what a record kind means. Deciding what a *named* tile *is* belongs with
+///   the rest of the name handling rather than in three systems that would each have to
+///   repeat it.
+///
+/// An unrecognised name becomes [engine::components::TileType::Solid], which is the
+/// safe direction: a tile nobody recognises is ordinary geometry, and a level is mostly
+/// ordinary geometry. See [engine::components::Tile] for the whole argument.
+[[nodiscard]] components::Tile tileFor(const std::string_view animationName) noexcept
+{
+    return components::Tile{components::tileTypeFor(animationName), false};
 }
 
 } // namespace
@@ -140,6 +172,12 @@ std::size_t LevelLoader::spawn(const Level& level, engine::ecs::EntityManager& w
 
             entity.addComponent<components::Collider>(components::Collider{size});
             entity.addComponent<components::Body>(components::Body{physics::BodyType::Static});
+
+            // The tile's gameplay identity, resolved from its animation name and resolved
+            // once. Every tile gets one - a plain tile's answer is `Solid`, which is a fact
+            // rather than an absence - so a gameplay system never has to ask whether a tile
+            // has been classified, only what it is.
+            entity.addComponent<components::Tile>(tileFor(tile.animationName));
         }
 
         // Decorations next, and this is the loop the course's one instruction is

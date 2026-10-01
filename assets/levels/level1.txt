@@ -54,6 +54,35 @@ Tile mario_ground_tile 9 4
 Tile mario_SmallPipe_tile 20 0
 Tile mario_SmallPipe_tile 21 0
 
+# --- bricks: the course's destructible tile --------------------------------------
+#
+# Two, and they are at different heights on purpose, because there are two different ways to
+# hit a brick and one height cannot serve both.
+#
+# The one at (8, 1) is at the player's own standing height. A bullet leaves the player's
+# centre - world y 930, which is 94 up from the bottom of the level - and cell (8,1) spans
+# world y 960..1024, so a shot fired from the spawn point reaches it after about 11 frames
+# and nothing else is in the way. The player can walk up to it and shoot it, and can also
+# walk under the ledge beyond it.
+#
+# The one at (5, 3) is high enough that a jump reaches it and low enough that a bullet does
+# not: cell (5,3) spans world y 768..832, and the highest the player's head gets is
+# 960 - (400^2 / (2 * 900)) - 60 = 811, which is inside it. So the player walks underneath
+# it and jumps, and hits its underside - which is the hit that has to be told apart from
+# landing on it and from walking into it.
+#
+# It is also deliberately *not* directly overhead. The player spawns at cell (3, 4), so a
+# brick at (3, 3) would sit squarely above the spawn column, where the player's box is
+# horizontally inside the brick's. The horizontal penetration there would exceed the
+# vertical one for most of the ascent, and the resolver would shove the player sideways out
+# of the block instead of stopping the jump - correct for the geometry it is given, and a
+# geometry no level designer would choose.
+#
+# mario_Brick_tile draws the ground block's artwork, which is the course's own mapping; see
+# the note on it in assets/assets.txt.
+Tile mario_Brick_tile 8 1
+Tile mario_Brick_tile 5 3
+
 # --- decorations: drawn, never collided with -------------------------------
 #
 # Dec positions are PIXELS, not grid cells, and they are the entity's centre. So

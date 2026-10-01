@@ -140,6 +140,61 @@ Animation mario_SmallBush_dec            mario_SmallBush    1  1
 Animation mario_BigBush_dec              mario_BigBush      1  1
 Animation megaman_megaBuster_shot    megaman_megaBuster  1  1
 
+# --- the gameplay tiles, and the coin a question block drops --------------------
+#
+# Four more one-frame animations, added by Phase 18 for the tile behaviour: a brick, the two
+# states of a question block, and the coin.
+#
+# ### mario_Brick_tile is the ground tile's artwork, and that is the course's own mapping
+#
+# There is no brick artwork in this library. That is not an oversight in the import - it is
+# a property of the course's asset library, and the course's reference resolves it by
+# pointing its brick texture at the ground image:
+#
+#     Texture TexBrick ../bin/images/mario/ground.png
+#
+# So this is the course's mapping transcribed into this file's naming convention, not an
+# invention. A brick is drawn with the ground block's 64x64 image, is therefore exactly one
+# grid cell, and collides as exactly one cell - which is what makes it placeable in a level
+# at all. Phase 13 declined to declare this because nothing had established the mapping; the
+# course's `TexBrick` line is that establishment.
+#
+# ### The question block's artwork is real and cannot be a grid cell
+#
+#   mario_question_block   360 x 360
+#   mario_question2_block  160 x 160
+#
+# Both are declared honestly, at the size they actually are. Neither is placed in
+# levels/level1.txt, and the reason is arithmetic rather than taste: the course sizes a
+# tile's bounding box from its animation, so a 360-pixel box in a 64-pixel cell would be a
+# block five and a half cells wide that a player could not walk past, and no integer frame
+# count expresses the image at cell size - frames are one row of equal columns filling the
+# full height, so the height is always the texture's height. The behaviour is implemented,
+# tested and reachable; the shipped level simply does not contain a tile whose artwork
+# cannot honestly occupy a cell.
+#
+# The honest fixes are the same two this file already names for megaman_megaRun:
+# re-author the strips at a width that divides evenly into cells, or add a per-frame offset
+# or fit field to the animation format. Both are changes to the animation core rather than to
+# the tile behaviour, so neither is made here.
+#
+# ### The coin is one frame because the coin spin strip cannot be sliced
+#
+#   mario_coin_pickup      500 x 299    library/images/mario/coin.png, a single coin
+#   animations_coinspin    500 x 280    six coins, gutters 11, 31, 52, 56 and 35 px wide
+#
+# coinspin is genuinely multi-frame and genuinely unusable by this format: its transparent
+# gutters are not equal, so no frame count that divides 500 lines the coins up with their own
+# frames. Slicing it at 500/4, or 500/5, or 500/6 would put four, five or six *different*
+# coins' worth of artwork into one frame - a misregistration, which is exactly what the
+# divisibility rule exists to prevent. mario/coin.png is one coin, so a one-frame animation
+# is a true statement rather than a placeholder. Phase 18 draws it through
+# Transform::scale, which costs no geometry because a coin has no collider.
+Animation mario_Brick_tile           mario_ground        1  1
+Animation mario_question_block       mario_question      1  1
+Animation mario_question2_block      mario_question2     1  1
+Animation mario_coin_pickup          mario_coin          1  1
+
 # --- the player's own animations -----------------------------------------------
 #
 # The course names three player states and three pictures: "The player Entity in the

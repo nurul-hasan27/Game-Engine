@@ -1752,9 +1752,12 @@ void testTheFallLimitIsTheWorldsBottomEdge()
         return;
     }
 
-    // `PlayerSystem` is first, and its fall limit is the world height in pixels.
-    CHECK(play->systems().systemCount() == 6U);
-    if (play->systems().systemCount() != 6U)
+    // `PlayerSystem` is still first, and its fall limit is the world height in
+    // pixels. Phase 18 inserted three systems *after* index 0 rather than before it, so
+    // this index is unchanged - which is the point of asserting it here as well as in the
+    // scene suite.
+    CHECK(play->systems().systemCount() == 9U);
+    if (play->systems().systemCount() != 9U)
     {
         return;
     }

@@ -9,9 +9,12 @@
 #include "engine/level/LevelLoader.hpp"
 #include "engine/systems/AnimationSystem.hpp"
 #include "engine/systems/CameraSystem.hpp"
+#include "engine/systems/LifetimeSystem.hpp"
 #include "engine/systems/PhysicsSystem.hpp"
 #include "engine/systems/PlayerStateSystem.hpp"
 #include "engine/systems/PlayerSystem.hpp"
+#include "engine/systems/ShootSystem.hpp"
+#include "engine/systems/TileSystem.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -122,10 +125,15 @@ PlayScene::PlayScene(const SceneContext& context)
 {
     // Registration order is the update order, and every line below is load bearing.
     //
-    //   PlayerSystem     actions       -> intent, jump, gravity, respawn
+    //   PlayerSystem     actions       -> intent, jump, gravity, respawn, facing
+    //   ShootSystem      Shoot press   -> a bullet entity, in the direction the player
+    //                                     already faces, moving this same frame
+    //   LifetimeSystem   frame counter -> "your last frame was this one"
     //   PhysicsSystem    velocity      -> position, then collisions, then reports
     //                                     what overlapped and how it arrived
     //   PlayerStateSystem that report  -> grounded, Stand/Run/Air, and the picture
+    //   TileSystem       that report    -> bricks explode, question blocks are used,
+    //                                     coins appear, bullets stop
     //   CameraSystem     target        -> camera position, *after* physics so it
     //                                     follows where the player ended up
     //   ZoomKeysSystem   zoom actions  -> camera zoom
@@ -139,8 +147,28 @@ PlayScene::PlayScene(const SceneContext& context)
     // scene transition than on the hundredth, which reads as an inconsistency rather
     // than as input lag.
     //
+    // **ShootSystem immediately after it**, for two reasons that are both about this frame.
+    // It reads `scale.x` to decide which way the bullet goes, and PlayerSystem is what
+    // writes it - the authority for facing is the system that last set it, so firing
+    // before that would shoot the direction the player faced a frame ago. And it must
+    // create the bullet *before* the integration, or the new entity waits a frame for its
+    // first move, is absent from this frame's collision pass, and cannot be in this
+    // frame's report.
+    //
+    // **LifetimeSystem before the physics step**, so an entity whose last frame is this one
+    // neither moves nor collides this frame. Counting it down afterwards would leave a
+    // question about whether an entity that is already dead still gets to blow up the
+    // brick it hit, and the answer would be a fact about the order rather than about the
+    // game. It also puts the countdown ahead of the coin that TileSystem creates later in
+    // the same frame, which is what makes "thirty frames" mean thirty.
+    //
     // **PhysicsSystem before CameraSystem**, which predates this phase and still
     // holds: the camera follows where the player *ended* up, not where they started.
+    //
+    // **TileSystem straight after PlayerStateSystem**, because both read the same report and
+    // neither writes anything the other reads. It is before AnimationSystem because the
+    // explosion it starts is advanced the same frame it starts, so a brick breaks and
+    // explodes on one frame rather than two.
     //
     // **AnimationSystem last**, so the animation PlayerSystem chose this frame is the
     // one advanced this frame. Reversed, every state change would be a frame late and
@@ -158,10 +186,18 @@ PlayScene::PlayScene(const SceneContext& context)
     // in PlayerSystem would respawn them at the same place in every world.
     m_systems.add<engine::systems::PlayerSystem>(m_cellsTall * level::LevelGrid::kCellSize);
 
+    // A bullet's animation comes from the level and its box comes from that animation's
+    // frame size, so the shoot system needs the asset manager for exactly the same reason
+    // AnimationSystem does. Borrowed, from the context the scene already holds.
+    m_systems.add<engine::systems::ShootSystem>(context.assets());
+
+    // See the ordering note above: deliberately ahead of the integration.
+    m_systems.add<engine::systems::LifetimeSystem>();
+
     // `add` hands back a reference, and it stays valid: the system manager holds systems
     // through `unique_ptr` precisely so that registering another one does not move this
-    // one. So the reconciliation can be given the physics system's own report rather
-    // than reaching for a global - two scenes in one process, or a test with two
+    // one. So the two consumers of its report can be given the physics system's own report
+    // rather than reaching for a global - two scenes in one process, or a test with two
     // worlds, each see only their own collisions.
     const engine::systems::PhysicsSystem& physics = m_systems.add<engine::systems::PhysicsSystem>();
 
@@ -170,6 +206,12 @@ PlayScene::PlayScene(const SceneContext& context)
     // would put it a frame behind and reintroduce exactly the lag the collision report
     // exists to remove. See PlayerStateSystem's own documentation.
     m_systems.add<engine::systems::PlayerStateSystem>(physics.collisions());
+
+    // The other reader of the same report. It needs the asset manager as well, to resolve
+    // the used question block's and the coin's animation and to read the coin's frame size
+    // for the scale it is drawn at.
+    m_systems.add<engine::systems::TileSystem>(physics.collisions(), context.assets());
+
     m_systems.add<engine::systems::CameraSystem>(context.camera(), std::string{level::kPlayerTag});
     // Local class, not an engine one - see its own documentation above.
     m_systems.add<ZoomKeysSystem>(context.camera());

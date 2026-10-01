@@ -68,12 +68,23 @@ inline constexpr std::string_view kPlayerTag = "level.player";
 /// a level that loads and then draws nothing is a bug that takes a screenshot to
 /// diagnose, and a missing name is a bug a text editor finds immediately.
 ///
-/// It does **not** check that an animation is the *right* one for the job. The
-/// course says *"Tiles have different behavior depending on which Animation they
-/// are given"* - a brick explodes, a question block changes - and deciding which
-/// is which is gameplay, several phases away. Every tile spawned here gets the
-/// same components and the same behaviour: collision, size from its animation, and
-/// nothing else.
+/// It does **not** decide what a tile's artwork *means*. It does, once, and it is
+/// worth being precise about what that is: the course says *"Tiles have different
+/// behavior depending on which Animation they are given"*, so a level file's only
+/// statement about a brick is the name it gave the brick's animation. The loader
+/// resolves that name to an [engine::components::TileType] through one table and
+/// puts the answer in [engine::components::Tile]. An unrecognised name is
+/// [engine::components::TileType::Solid].
+///
+/// Every tile is otherwise spawned identically - collision, size from its
+/// animation - and no gameplay behaviour happens here. A brick does not explode and a
+/// question block does not change in this file; [engine::systems::TileSystem] does
+/// that, from this frame's collision report. What the loader does is give the systems
+/// something semantic to branch on, once, so that none of them has to compare a string.
+///
+/// An earlier version of this documentation said the loader did not classify tiles at
+/// all and that deciding which was "several phases away". It was the classification that
+/// was missing, not the decision: the decision was never this file's to make.
 ///
 /// ### Dependency injection, not a singleton
 ///

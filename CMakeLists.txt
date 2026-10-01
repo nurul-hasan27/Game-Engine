@@ -190,12 +190,15 @@ add_library(engine STATIC
             src/engine/math/Vec2.cpp
             src/engine/systems/AnimationSystem.cpp
             src/engine/systems/CameraSystem.cpp
+            src/engine/systems/LifetimeSystem.cpp
             src/engine/systems/MovementSystem.cpp
             src/engine/physics/Collision.cpp
             src/engine/systems/PhysicsSystem.cpp
             src/engine/systems/PlayerSystem.cpp
             src/engine/systems/PlayerStateSystem.cpp
-            src/engine/systems/RenderSystem.cpp)
+            src/engine/systems/RenderSystem.cpp
+            src/engine/systems/ShootSystem.cpp
+            src/engine/systems/TileSystem.cpp)
 
 target_include_directories(engine PUBLIC
                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -403,6 +406,24 @@ if(ENGINE_BUILD_TESTS)
     target_compile_options(player_test PRIVATE ${ENGINE_WARNING_FLAGS})
     add_test(NAME player.behaviour COMMAND player_test)
     set_tests_properties(player.behaviour PROPERTIES TIMEOUT 300)
+
+    # Combat and tile behaviour: shooting, bullet travel and destruction, brick
+    # explosions, the question block, and the coin.
+    #
+    # No compile definitions are injected because this suite is behavioural: every group
+    # runs the real systems in the real order against a world spawned by the real loader
+    # from level data, presses real keys through the real action map, and reads what came
+    # out. The one thing it asserts architecturally - that the systems are registered in
+    # the order that makes the frame work - is read off a real [engine::scene::PlayScene]
+    # rather than by scanning a file, so a system that is merely unregistered is caught
+    # rather than merely absent.
+    add_executable(combat_test tests/CombatTest.cpp)
+    target_link_libraries(combat_test PRIVATE engine)
+    target_compile_options(combat_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(combat_test PRIVATE
+        ENGINE_COMMITTED_LEVEL_FILE="${ENGINE_LEVEL_FILE}")
+    add_test(NAME combat.tiles COMMAND combat_test)
+    set_tests_properties(combat.tiles PROPERTIES TIMEOUT 300)
 
     # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
     #

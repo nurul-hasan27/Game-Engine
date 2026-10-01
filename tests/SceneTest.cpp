@@ -1083,34 +1083,48 @@ void testThePlaySceneRegistersItsOwnSystems()
     SceneFixture fixture;
     const std::unique_ptr<PlayScene> play = std::make_unique<PlayScene>(fixture.context());
 
-    // Six, in the order the level has always used, with the player's own two systems
-    // around physics. Registration order *is* update order, and the count is pinned so
-    // a system cannot be added or dropped without this suite noticing.
+    // Nine, in the order the level has always used, with the player's own systems and the
+    // phase's combat and tile systems around physics. Registration order *is* update
+    // order, and the count is pinned so a system cannot be added or dropped without this
+    // suite noticing.
     //
-    // ### Why the two positions around physics are the assertion
+    // ### Why the positions around physics are the assertion
     //
     // `PlayerSystem` is at the **front** because it writes the velocity
     // [engine::systems::PhysicsSystem] integrates in the same frame; a player that
-    // moved one frame late would feel it.
+    // moved one frame late would feel it. `ShootSystem` is at index 1 for the same kind
+    // of reason - a bullet created after the integration would wait a frame for its
+    // first move and could not be in this frame's collision report.
     //
-    // `PlayerStateSystem` is at index 2, **immediately after** physics, because the
+    // `LifetimeSystem` is at index 2, **before** physics, which is the one position here
+    // that is not simply "before its consumer". An entity whose last frame is this one
+    // must not move and must not collide, and counting it down before the step is what
+    // guarantees that rather than leaving it to be argued about.
+    //
+    // `PlayerStateSystem` is at index 4, **immediately after** physics, because the
     // player's `grounded` flag is read from the collisions physics just resolved.
     // Anywhere earlier and it would be a frame behind, which is the Phase 16 landing
     // lag that Phase 17 exists to remove - and a lag is invisible in a system count,
     // so it has to be pinned here by name and index.
     //
+    // `TileSystem` is at index 5, the other reader of the same report, and before
+    // `AnimationSystem` so an explosion it starts is advanced on the frame it starts.
+    //
     // The names are listed individually so that reordering - which would keep the
-    // count at six and break the game - is a failure rather than a silent regression.
-    CHECK(play->systems().systemCount() == 6U);
+    // count at nine and break the game - is a failure rather than a silent regression.
+    CHECK(play->systems().systemCount() == 9U);
 
-    if (play->systems().systemCount() == 6U)
+    if (play->systems().systemCount() == 9U)
     {
         CHECK(std::string{play->systems().systemAt(0U).name()} == "PlayerSystem");
-        CHECK(std::string{play->systems().systemAt(1U).name()} == "PhysicsSystem");
-        CHECK(std::string{play->systems().systemAt(2U).name()} == "PlayerStateSystem");
-        CHECK(std::string{play->systems().systemAt(3U).name()} == "CameraSystem");
-        CHECK(std::string{play->systems().systemAt(4U).name()} == "ZoomKeysSystem");
-        CHECK(std::string{play->systems().systemAt(5U).name()} == "AnimationSystem");
+        CHECK(std::string{play->systems().systemAt(1U).name()} == "ShootSystem");
+        CHECK(std::string{play->systems().systemAt(2U).name()} == "LifetimeSystem");
+        CHECK(std::string{play->systems().systemAt(3U).name()} == "PhysicsSystem");
+        CHECK(std::string{play->systems().systemAt(4U).name()} == "PlayerStateSystem");
+        CHECK(std::string{play->systems().systemAt(5U).name()} == "TileSystem");
+        CHECK(std::string{play->systems().systemAt(6U).name()} == "CameraSystem");
+        CHECK(std::string{play->systems().systemAt(7U).name()} == "ZoomKeysSystem");
+        CHECK(std::string{play->systems().systemAt(8U).name()} == "AnimationSystem");
     }
 
     // No movement system, and the absence is load bearing: this engine's movement
@@ -1511,7 +1525,7 @@ void testTheMenuTransitionsToPlayAndBack()
     if (play != nullptr)
     {
         CHECK(play->world().aliveEntityCount() > 28U);
-        CHECK(play->systems().systemCount() == 6U);
+        CHECK(play->systems().systemCount() == 9U);
     }
 
     application.render();
@@ -2278,12 +2292,12 @@ void testScenesDoNotRegisterIntoTheApplication()
     application.changeScene(SceneId::Play);
     application.update();
 
-    // Four systems in the play scene, and still none in the application.
+    // Nine systems in the play scene, and still none in the application.
     const auto* play = dynamic_cast<const PlayScene*>(application.currentScene());
     CHECK(play != nullptr);
     if (play != nullptr)
     {
-        CHECK(play->systems().systemCount() == 6U);
+        CHECK(play->systems().systemCount() == 9U);
     }
     CHECK(application.systemManager().systemCount() == 0U);
 

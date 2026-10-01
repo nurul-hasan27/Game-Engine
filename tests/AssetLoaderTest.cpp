@@ -1696,11 +1696,12 @@ void testTheShippedConfigurationParses()
     // reject is worthless, so this is the only version of the check that matters.
     const std::vector<engine::assets::AssetEntry> entries = parseShippedConfiguration();
 
-    // 24 textures + 3 fonts + 11 animations. The textures and fonts are the whole
+    // 24 textures + 3 fonts + 15 animations. The textures and fonts are the whole
     // committed library and have not moved; Phase 13 added the six level animations,
-    // taking animations from 3 to 9, and Phase 16 added the two player animations,
-    // taking them from 9 to 11.
-    CHECK(entries.size() == 38U);
+    // taking animations from 3 to 9, Phase 16 added the two player animations, taking
+    // them from 9 to 11, and Phase 18 added the brick, the two question blocks and the
+    // coin, taking them from 11 to 15.
+    CHECK(entries.size() == 42U);
 }
 
 void testTheShippedConfigurationHasTheExpectedEntryCounts()
@@ -1726,7 +1727,7 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
         }
     }
 
-    // 24 images, 3 fonts and 9 animations.
+    // 24 images, 3 fonts and 15 animations.
     //
     // The images and fonts are the whole committed library, unchanged. The
     // animations are of two kinds and the distinction matters more than the total:
@@ -1734,12 +1735,14 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
     //   3 multi-frame   the strips in the library. Each one's frame count was
     //                    measured against the real artwork before being written
     //                    down, and each divides its texture's width exactly.
-    //   6 single-frame  added by Phase 13, one per animation named by
-    //                    `assets/levels/level1.txt`. A static tile, a cloud and a
-    //                    bullet are each one picture, so a one-frame animation is
-    //                    the honest description. A frame count of 1 divides every
-    //                    width exactly, so the rule that made megaman_megaRun
-    //                    unloadable does not apply to any of them.
+    //   12 single-frame added by Phase 13 (one per animation named by
+    //                    `assets/levels/level1.txt`), by Phase 16 (the player's stand
+    //                    and air) and by Phase 18 (the brick, the two question blocks
+    //                    and the coin). A static tile, a cloud, a bullet, a brick, a
+    //                    question block and a coin are each one picture, so a
+    //                    one-frame animation is the honest description. A frame count
+    //                    of 1 divides every width exactly, so the rule that made
+    //                    megaman_megaRun unloadable does not apply to any of them.
     //
     // The group below derives the texture and font numbers from the library itself,
     // so this one is the statement of intent rather than a second guess at the same
@@ -1749,8 +1752,8 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
     // animations, and 9 to 11 for the player's stand and air.
     CHECK(textures == 24U);
     CHECK(fonts == 3U);
-    CHECK(animations == 11U);
-    CHECK(textures + fonts + animations == 38U);
+    CHECK(animations == 15U);
+    CHECK(textures + fonts + animations == 42U);
 
     // A stronger claim than the flat total: exactly three animations advance, and
     // exactly six are a single still frame. If a later phase adds a multi-frame
@@ -1775,13 +1778,14 @@ void testTheShippedConfigurationHasTheExpectedEntryCounts()
         }
     }
 
-    // Three multi-frame strips, and eight single-frame ones: the six level
-    // animations plus the player's stand and air. The split matters because the
+    // Three multi-frame strips, and twelve single-frame ones: the six level
+    // animations, the player's stand and air, and the brick, question block, used
+    // question block and coin. The split matters because the
     // multi-frame ones are the only ones with a frame width to divide, and a frame
     // count of 1 divides every width exactly - which is why declaring the player's
     // stand and air this way is possible at all while the 733-pixel run strip is not.
     CHECK(multiFrame == 3U);
-    CHECK(singleFrame == 8U);
+    CHECK(singleFrame == 12U);
 }
 
 void testDeclaringTheRunStripAsThreeFramesIsRejected()
@@ -1946,7 +1950,7 @@ void testEveryDeclaredFrameCountDividesItsTexture()
 
     // Every animation in the shipped file was actually checked, so the group cannot
     // pass by finding nothing to look at.
-    CHECK(checked == 11U);
+    CHECK(checked == 15U);
 }
 
 void testEveryConfiguredPathExists()
@@ -2036,13 +2040,14 @@ void testEveryConfiguredAssetLoadsThroughTheManager()
     // The end-to-end statement: the shipped configuration, loaded by the real
     // loader, resolves every name to a real resource. Constructing the manager
     // already throws if any file will not load, so reaching the checks below means
-    // all 38 entries were accepted. 30 before Phase 13, which added six animations,
-    // and 36 before Phase 16, which added two more and no textures or fonts.
+    // all 42 entries were accepted. 30 before Phase 13, which added six animations,
+    // 36 before Phase 16, which added two more, and 38 before Phase 18, which added
+    // four more. No phase after Phase 12 has added a texture or a font.
     const SfmlAssetManager manager{shippedConfiguration()};
 
     CHECK(manager.textureCount() == 24U);
     CHECK(manager.fontCount() == 3U);
-    CHECK(manager.animationCount() == 11U);
+    CHECK(manager.animationCount() == 15U);
 
     for (const engine::assets::AssetEntry& entry : parseShippedConfiguration())
     {

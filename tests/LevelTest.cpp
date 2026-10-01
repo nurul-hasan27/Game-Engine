@@ -218,6 +218,15 @@ void declareTheCommittedLevel(FakeAssetManager& assets)
     // the library says 190x208 would stop noticing if the artwork changed.
     assets.declare("megaman_megaStand_stand", 190, 208);
     assets.declare("megaman_megaJump_air", 279, 266);
+    // The gameplay tiles and the coin Phase 18 added. The brick is declared at the ground
+    // tile's 64x64 because that is the artwork the course points its own `TexBrick` at -
+    // see the note on `mario_Brick_tile` in assets/assets.txt. The two question blocks are
+    // declared at the real sizes of the committed artwork, 360x360 and 160x160, because a
+    // double that invented round numbers could not tell a wrong size from a right one.
+    assets.declare("mario_Brick_tile", 64, 64);
+    assets.declare("mario_question_block", 360, 360);
+    assets.declare("mario_question2_block", 160, 160);
+    assets.declare("mario_coin_pickup", 500, 299);
 }
 
 /// Overwrites a frame of stack with a pattern, and returns what it wrote.
@@ -454,7 +463,7 @@ void testTheCommittedLevelParses()
     const Level level = engine::level::loadLevelFile(ENGINE_COMMITTED_LEVEL_FILE);
 
     CHECK(level.hasPlayer());
-    CHECK(level.tiles().size() == 24U);
+    CHECK(level.tiles().size() == 26U);
     CHECK(level.decorations().size() == 4U);
 
     // The player line, from the file's own values.
@@ -1281,10 +1290,16 @@ void testTwoLoadersOverTwoManagersEachUseTheirOwn()
 
 void testEachTileKeepsItsOwnAnimationName()
 {
-    // The committed level has two tiles that are *not* the ground tile - the two
-    // halves of the pipe - and they name a different animation. A loader that wrote
-    // one animation name for every tile would satisfy every other group in this file,
-    // because the floor, the ledge and the ground all share a name.
+    // The committed level has three kinds of tile that are *not* the ground tile - the two
+    // halves of the pipe and the two bricks Phase 18 added - and they name different
+    // animations. A loader that wrote one animation name for every tile would satisfy every
+    // other group in this file, because the floor, the ledge and the ground all share one.
+    //
+    // The bricks are classified by **name** rather than by size, and that is the point of
+    // the change: `mario_Brick_tile` is declared over the ground tile's own 64x64 artwork,
+    // so a brick and a piece of ground are the same size and only the name tells them
+    // apart. Classifying by collider size would have folded the two bricks in with the
+    // twenty-two ground tiles and quietly passed.
     FakeAssetManager assets;
     declareTheCommittedLevel(assets);
     const LevelLoader loader{assets};
@@ -1297,6 +1312,7 @@ void testEachTileKeepsItsOwnAnimationName()
 
     std::size_t ground = 0;
     std::size_t pipe = 0;
+    std::size_t brick = 0;
 
     for (auto&& [entity, collider, animation] :
          world.query<engine::components::Collider, engine::components::Animation>())
@@ -1312,6 +1328,14 @@ void testEachTileKeepsItsOwnAnimationName()
             // The pipe's own name, and the pipe's own size, on the same entity.
             CHECK(animation.assetName == "mario_SmallPipe_tile");
         }
+        else if (animation.assetName == "mario_Brick_tile")
+        {
+            ++brick;
+            // Same 64x64 box as the ground, because that is the artwork the course's own
+            // `TexBrick` names. So the size proves nothing here and the name is the whole
+            // claim.
+            CHECK(collider.size == Vec2(64.0F, 64.0F));
+        }
         else
         {
             ++ground;
@@ -1321,6 +1345,7 @@ void testEachTileKeepsItsOwnAnimationName()
 
     CHECK(ground == 22U);
     CHECK(pipe == 2U);
+    CHECK(brick == 2U);
 }
 
 void testATileIsAnchoredByItsAnimationSize()
@@ -1713,8 +1738,12 @@ void testSpawnReturnsTheEntityCount()
     EntityManager world;
     const std::size_t spawned = loader.spawn(level, world, grid);
 
-    // Every tile, every decoration, and the player.
-    CHECK(spawned == 29U);
+    // Every tile, every decoration, and the player. The absolute number is 31 because the
+    // committed level has 26 tiles - the 24 it always had plus the two bricks Phase 18
+    // added - and 4 decorations. The line below it is the real assertion: the count is
+    // derived from the file, so a level that gains or loses a tile does not need this
+    // group edited to keep passing.
+    CHECK(spawned == 31U);
     CHECK(spawned == level.tiles().size() + level.decorations().size() + 1U);
     CHECK(world.aliveEntityCount() == spawned);
 }
@@ -1731,7 +1760,7 @@ void testTheCommittedLevelSpawnsWithTheRightTags()
     EntityManager world;
     static_cast<void>(loader.spawn(level, world, grid));
 
-    CHECK(countIn(world.getEntities(engine::level::kTileTag)) == 24U);
+    CHECK(countIn(world.getEntities(engine::level::kTileTag)) == 26U);
     CHECK(countIn(world.getEntities(engine::level::kDecorationTag)) == 4U);
     CHECK(countIn(world.getEntities(engine::level::kPlayerTag)) == 1U);
 }
@@ -1762,8 +1791,12 @@ void testTheCommittedLevelIsDrawnAndCollides()
     for (auto&& [entity, transform, collider, animation] :
          world.query<Transform, engine::components::Collider, engine::components::Animation>())
     {
-        static_cast<void>(animation);
-        if (entity.tag() != engine::level::kTileTag || collider.size != Vec2(64.0F, 64.0F))
+        // The animation **name** as well as the size, because Phase 18 put two bricks in
+        // this level and `mario_Brick_tile` is drawn with the ground tile's own 64x64
+        // artwork - so the size alone no longer says "this is a piece of ground". Filtering
+        // on the name is what keeps the counts below about the floor and the ledge.
+        if (entity.tag() != engine::level::kTileTag || collider.size != Vec2(64.0F, 64.0F) ||
+            animation.assetName != "mario_ground_tile")
         {
             continue;
         }
@@ -1816,8 +1849,8 @@ void testTheLoaderAsksTheAssetManagerForEveryName()
     EntityManager world;
     static_cast<void>(loader.spawn(level, world, grid));
 
-    // 24 tiles + 4 decorations + 1 bullet animation.
-    CHECK(assets.lookupCount() == 29);
+    // 26 tiles + 4 decorations + 1 bullet animation.
+    CHECK(assets.lookupCount() == 31);
     CHECK(assets.lastLookup() == "megaman_megaBuster_shot");
 }
 
@@ -2077,8 +2110,9 @@ void testNoTextureIsEverRequested()
     static_cast<void>(loader.spawn(level, world, grid));
 
     // Every name it asked for was an animation; the double would have thrown on a
-    // texture, so reaching here is the assertion.
-    CHECK(assets.lookupCount() == 29);
+    // texture, so reaching here is the assertion. One per tile, one per decoration and
+    // one for the player's bullet animation: 26 + 4 + 1.
+    CHECK(assets.lookupCount() == 31);
 }
 
 // ---------------------------------------------------------------------------

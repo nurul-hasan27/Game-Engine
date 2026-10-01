@@ -1425,10 +1425,11 @@ void testTheRunStripIsStillUndeclaredAndTheReasonStillHolds()
 void testTheShippedAnimationsPlay()
 {
     // The entries `assets/assets.txt` declares, through the real loader and the real
-    // artwork. Eleven of them: the three multi-frame strips below, the six
-    // single-frame animations Phase 13 added for `assets/levels/level1.txt`, and the
+    // artwork. Fifteen of them: the three multi-frame strips below, the six
+    // single-frame animations Phase 13 added for `assets/levels/level1.txt`, the
     // two Phase 16 added for the player - `megaman_megaStand_stand` and
-    // `megaman_megaJump_air`.
+    // `megaman_megaJump_air` - and the four Phase 18 added for the tile behaviour:
+    // the brick, the two question blocks and the coin.
     //
     // The count is a real assertion rather than a formality: it is what notices an
     // animation being *removed* from the shipped configuration, which is the failure
@@ -1441,7 +1442,7 @@ void testTheShippedAnimationsPlay()
     // are the ones a gameplay system resolves by name.
     SfmlAssetManager assets = shippedManager();
 
-    CHECK(assets.animationCount() == 11U);
+    CHECK(assets.animationCount() == 15U);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameCount() == 2U);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameWidth() == 50);
     CHECK(assets.animation("mario_GoombaWalk_walk").frameHeight() == 41);
