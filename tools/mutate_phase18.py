@@ -32,9 +32,11 @@ written:
 * Ordering is invisible to a count. `LifetimeSystem` after `TileSystem` keeps every group
   green except one; a brick that answers only to bullets keeps every group green except one.
   Both are here.
-* The brick's collider comes off the moment it explodes, which makes the brick's `activated`
-  flag genuinely unobservable. That is a real equivalence rather than a testing gap, and it is
-  reported as one with the reason written down instead of being quietly omitted.
+* A mutation that does not compile is not a failed test, and a mutation that changes nothing
+  is worse than none at all - it looks like coverage. Two of these named types the file does
+  not import, and one "removed" a guard by adding a second copy of it. All three were
+  rewritten rather than explained away, which is why this header still has room for the
+  honest count: fifty-three detected, one proven equivalence, none missed.
 """
 
 import json
