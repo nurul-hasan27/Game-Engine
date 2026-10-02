@@ -161,9 +161,9 @@ mutation(
     "the player watches and the explosion plays out behind the pause. Exactly the failure "
     "the brief warns about, and one that a player looking only at the player would never "
     "see.",
-    [patch(PLAY_C, "    if (m_paused)\n    {\n        return;\n    }\n\n    m_systems.update(",
-           "    // MUTATION: freeze the clock rather than skip the systems\n"),
+    [patch(PLAY_C, "    if (m_paused)\n    {\n        return;\n    }\n\n", ""),
      patch(PLAY_C, "    m_systems.update(m_world, actions, deltaSeconds);",
+           "    // MUTATION: freeze the clock rather than skip the systems\n"
            "    m_systems.update(m_world, actions, m_paused ? 0.0F : deltaSeconds);")],
 )
 
@@ -275,17 +275,14 @@ mutation(
     "second one. A suite that only ever put animated entities in the world would not have "
     "noticed; `debug.controls` now puts one entity of each kind in the same frame.",
     [patch(RENDER_C,
-           "        // Two steps, and deliberately so. The animation says which image and how\n"
-           "        // it is divided; the texture it names is a separate asset, looked up by\n"
-           "        // name. Resolving the texture once per frame per entity keeps the\n"
-           "        // alternative - an animation carrying a texture handle - out of the\n"
-           "        // component, where a copy of the artwork would exist for every entity.\n",
-           "        // MUTATION: no flag check here\n"
-           "        // Two steps, and deliberately so. The animation says which image and how\n"
-           "        // it is divided; the texture it names is a separate asset, looked up by\n"
-           "        // name. Resolving the texture once per frame per entity keeps the\n"
-           "        // alternative - an animation carrying a texture handle - out of the\n"
-           "        // component, where a copy of the artwork would exist for every entity.\n")],
+           "        // An animation frame is an image with a source region, so it is exactly the\n"
+           "        // thing the `T` key turns off - and it has to be turned off **here** as well\n"
+           "        // as in query 2, or `T` would hide a plain sprite and leave every animated\n"
+           "        // entity in the level - the player, every bullet, every exploding brick -\n"
+           "        // fully visible. The two queries are separate, so the answer is read twice;\n"
+           "        // that is deliberate duplication rather than a missed case.\n"
+           "        if (!m_debug.showTextures)\n        {\n            continue;\n        }\n",
+           "        // MUTATION: the animation query never consults the flag\n")],
 )
 
 mutation(
@@ -352,15 +349,25 @@ mutation(
     "geometry: a box the physics never used, at a size nothing chose.",
     [patch(DEBUG_SYS_C,
            "    for (auto&& [entity, transform, collider] : entities.query<components::Transform, components::Collider>())\n"
-           "    {\n        static_cast<void>(entity);",
-           "    for (auto&& [entity, transform] : entities.query<components::Transform>())\n    {\n"
+           "    {\n"
+           "        static_cast<void>(entity);\n"
+           "\n"
+           "        // `collider.size`, not a size this file chose. A 70x70 pipe gets a 70x70\n"
+           "        // box, a 40x60 player gets a 40x60 box, and a debug box cannot disagree\n"
+           "        // with what physics collided with because it is reading the same number.\n"
+           "        m_renderer->drawRectangle(collider.size, kBoundingBoxColor, graphics::toRenderTransform(transform, *m_camera));\n"
+           "    }\n"
+           "}",
+           "    // MUTATION: a box for every transform, at a made-up size when there is no collider\n"
+           "    for (auto&& [entity, transform] : entities.query<components::Transform>())\n"
+           "    {\n"
            "        const components::Collider* const box = entity.tryGetConstComponent<components::Collider>();\n"
-           "        // MUTATION: a box for everything, at a made-up size when there is no collider\n"
-           "        const Vec2 size = box != nullptr ? box->size : Vec2{64.0F, 64.0F};\n"
+           "        const Vec2 size = box != nullptr ? box->size\n"
+           "                                          : Vec2{level::LevelGrid::kCellSize, level::LevelGrid::kCellSize};\n"
            "        m_renderer->drawRectangle(size, kBoundingBoxColor,\n"
-           "                                  graphics::toRenderTransform(transform, *m_camera));\n        continue;\n    }\n\n"
-           "    for (auto&& [entity, transform, collider] : entities.query<components::Transform, components::Collider>()))\n"
-           "    {\n        static_cast<void>(entity);")],
+           "                                  graphics::toRenderTransform(transform, *m_camera));\n"
+           "    }\n"
+           "}")],
 )
 
 mutation(

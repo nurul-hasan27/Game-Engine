@@ -962,8 +962,18 @@ void testAnExplosionStopsWithTheWorldAndFinishesWhenItResumes()
         fixture.update(driver.held());
     }
 
-    CHECK(explodingBrick(fixture.world()) != nullptr);
-    const Entity& frozen = *explodingBrick(fixture.world());
+    // Stop here rather than dereference: with the pause gate removed the explosion
+    // finishes and the entity is gone, so `frozen` would be a null dereference and
+    // the suite would abort with a signal instead of reporting the failure it just
+    // recorded. A group that crashes on the way to a conclusion reports nothing.
+    const Entity* stillExploding = explodingBrick(fixture.world());
+    CHECK(stillExploding != nullptr);
+    if (stillExploding == nullptr)
+    {
+        return;
+    }
+
+    const Entity& frozen = *stillExploding;
     CHECK_NEAR(frozen.getComponent<Transform>().position.x, brokenPosition.position.x, 0.0001F);
     CHECK_NEAR(frozen.getComponent<Transform>().position.y, brokenPosition.position.y, 0.0001F);
     CHECK(frozen.getComponent<Animation>().currentFrame == playing.currentFrame);
@@ -1485,6 +1495,14 @@ void testGDrawsTheLevelGridSnappedToCellBoundaries()
     CHECK(lines.vertical.size() == 21U);
     CHECK(lines.horizontal.size() == 12U);
 
+    // Everything below reads the vectors, so a wrong count has to stop here rather
+    // than index past the end. The counts are the assertion; what follows only means
+    // something once they have held.
+    if (lines.vertical.empty() || lines.horizontal.empty())
+    {
+        return;
+    }
+
     // Each one is an exact cell boundary in **world** space, which is the claim that
     // there is one grid rather than two nearby ones.
     for (const DrawCall& line : lines.vertical)
@@ -1566,6 +1584,10 @@ void testTheGridFollowsTheCamera()
     fixture.renderFrame();
     const GridLines atOrigin = gridLinesOf(fixture);
     CHECK(atOrigin.vertical.size() == 21U);
+    if (atOrigin.vertical.empty() || atOrigin.horizontal.empty())
+    {
+        return;
+    }
 
     // Move the camera 320 world pixels right - five whole cells.
     Camera movedView = originView;
@@ -1576,6 +1598,10 @@ void testTheGridFollowsTheCamera()
 
     CHECK(moved.vertical.size() == atOrigin.vertical.size());
     CHECK(moved.horizontal.size() == atOrigin.horizontal.size());
+    if (moved.vertical.empty() || moved.horizontal.empty())
+    {
+        return;
+    }
 
     // Every line is still a cell boundary, in both views.
     for (const DrawCall& line : moved.vertical)
@@ -1640,6 +1666,14 @@ void testTheGridScalesWithTheZoom()
     const GridLines zoomed = gridLinesOf(fixture);
     CHECK(zoomed.vertical.size() == 11U);
 
+    // Read nothing past the end when the count is wrong: these are the numbers the
+    // group exists to state, and an index into an empty vector would abort the suite
+    // instead of reporting them.
+    if (zoomed.vertical.size() < 2U)
+    {
+        return;
+    }
+
     // Twice as far apart on screen, because the grid is world space and the world is
     // magnified. The line's own thickness is still one **world** pixel - which is
     // exactly the distinction a screen-space grid gets wrong, since it would have to
@@ -1666,7 +1700,7 @@ void testTheGridScalesWithTheZoom()
         const Vec2 world = fixture.camera().screenToWorld(line.placement.position);
         CHECK_NEAR(std::fmod(world.x, kCell), 0.0F, 0.001F);
     }
-    CHECK(out.vertical.size() > zoomed.vertical.size());
+    CHECK(out.vertical.size() > 11U);
 }
 
 void testTheOverlaysChangeNothingAboutTheGame()
