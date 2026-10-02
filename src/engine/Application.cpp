@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
 
 namespace engine
 {
@@ -24,6 +25,62 @@ namespace
 /// The background the renderer clears to, still driven by the Phase 1 config.
 constexpr Color kWindowBackground = toColor(config::kBackgroundColorRed, config::kBackgroundColorGreen,
                                             config::kBackgroundColorBlue);
+
+/// One token of a recorded input script, as the engine's own physical key.
+///
+/// The script is written the way a person reads a key cap, and this is where a
+/// token becomes an [input::Key]. `space` and `escape` are spelled out rather than
+/// given a letter, because a literal space in a command-line argument has to be
+/// quoted and a quoted shell argument is exactly the thing that goes wrong
+/// quietly; `.` means "press nothing", so an idle stretch can be written
+/// `.:30` without inventing a key for it.
+///
+/// Upper and lower case are the same physical key on every layout this engine
+/// binds, and a script that had to know which the author typed would be a worse
+/// script.
+[[nodiscard]] input::Key toKey(const std::string_view token) noexcept
+{
+    if (token == "space" || token == " ")
+    {
+        return input::Key::Space;
+    }
+    if (token == "escape" || token == "esc" || token == "e")
+    {
+        return input::Key::Escape;
+    }
+    if (token == "." || token.empty())
+    {
+        return input::Key::Unknown; // "nothing": the token exists only to advance frames
+    }
+
+    const char letter = static_cast<char>(token[0] >= 'a' ? token[0] - ('a' - 'A') : token[0]);
+
+    switch (letter)
+    {
+        case 'A':
+            return input::Key::A;
+        case 'D':
+            return input::Key::D;
+        case 'S':
+            return input::Key::S;
+        case 'W':
+            return input::Key::W;
+        case 'P':
+            return input::Key::P;
+        case 'T':
+            return input::Key::T;
+        case 'C':
+            return input::Key::C;
+        case 'G':
+            return input::Key::G;
+        case 'Z':
+            return input::Key::Z;
+        case 'X':
+            return input::Key::X;
+        default:
+            return input::Key::Unknown;
+    }
+}
 
 } // namespace
 
@@ -64,6 +121,17 @@ Application::Application()
 
 int Application::run(const std::optional<std::size_t> maxFrameCount)
 {
+    return runWithInput({}, maxFrameCount);
+}
+
+int Application::runWithInput(const std::string_view script, const std::optional<std::size_t> maxFrameCount)
+{
+    // The script is parsed **once**, here, and the tokens are then walked once per
+    // frame. A frame is the unit the loop already works in, so the script is
+    // expressed in the same unit rather than in seconds - which also means a
+    // recorded sequence is the same sequence on a slow machine and a fast one.
+    m_inputScript.assign(script);
+
     std::size_t frameCount = 0;
 
     while (m_isRunning)
@@ -80,6 +148,10 @@ int Application::run(const std::optional<std::size_t> maxFrameCount)
             break; // the window was closed while we were handling events
         }
 
+        // Where a frame's keyboard comes from. Empty in every ordinary run, and the
+        // one branch is the whole cost.
+        applyRecordedInput();
+
         update();
         render();
         ++frameCount;
@@ -90,7 +162,74 @@ int Application::run(const std::optional<std::size_t> maxFrameCount)
         }
     }
 
+    m_inputScript.clear();
+
     return EXIT_SUCCESS;
+}
+
+void Application::applyRecordedInput()
+{
+    if (m_inputScript.empty())
+    {
+        return;
+    }
+
+    // Whitespace-separated tokens, consumed one per frame. A `.:30` is rewritten as
+    // `.:29` and pushed back, so the *token* counts frames rather than the loop
+    // counting characters - which is what keeps a held key held for exactly the
+    // number of frames that were asked for.
+    std::size_t begin = 0U;
+    while (begin < m_inputScript.size() && m_inputScript[begin] == ' ')
+    {
+        ++begin;
+    }
+    m_inputScript.erase(0, begin);
+
+    const std::size_t end = m_inputScript.find(' ');
+    const std::string_view token{end == std::string::npos ? m_inputScript : m_inputScript.substr(0, end)};
+
+    const std::size_t colon = token.find(':');
+    const std::string_view name = token.substr(0, colon);
+    std::size_t count = 1U;
+    if (colon != std::string_view::npos)
+    {
+        count = std::strtoul(std::string{token.substr(colon + 1U)}.c_str(), nullptr, 10);
+    }
+
+    const input::Key key = toKey(name);
+
+    if (count > 1U)
+    {
+        if (key != input::Key::Unknown)
+        {
+            // Pressed on this frame; `Input` swallows the repeats, so the remaining
+            // frames of the hold are genuinely held rather than re-pressed.
+            m_input.processKeyDown(key);
+        }
+
+        const std::string next = std::string{name} + ":" + std::to_string(count - 1U);
+        m_inputScript.insert(0, next);
+        m_inputScript.insert(0, " ");
+        return;
+    }
+
+    // The last frame of a hold, or a single-frame tap. Either way the key goes up
+    // here, and a one-frame token that was pressed above goes down then up - which
+    // is what makes it a *press* rather than a hold.
+    if (key != input::Key::Unknown)
+    {
+        m_input.processKeyDown(key);
+        m_input.processKeyUp(key);
+    }
+
+    if (end == std::string::npos)
+    {
+        m_inputScript.clear();
+    }
+    else
+    {
+        m_inputScript.erase(0, end + 1U);
+    }
 }
 
 void Application::processEvents()

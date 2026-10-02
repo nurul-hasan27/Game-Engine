@@ -241,6 +241,17 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME application.end_to_end COMMAND game --frames 5)
     set_tests_properties(application.end_to_end PROPERTIES TIMEOUT 60)
 
+    # The same executable, made to play itself.
+    #
+    # `--keys` feeds the recorded script through the real `engine::input::Input`, so
+    # this is the one check that covers the *shipped binary* - the window, the asset
+    # manager, the scene factory, every system and the SFML renderer - rather than a
+    # test binary with a double for one of them. The script is menu to level to a
+    # destroyed brick and back, which is the whole slice in one argument.
+    add_test(NAME application.scripted_playthrough
+             COMMAND game --frames 600 --keys "space .:90 D:120 space .:60 C G .:300")
+    set_tests_properties(application.scripted_playthrough PROPERTIES TIMEOUT 120)
+
     # Math test: engine::Vec2, which is SFML independent.
     add_executable(vec2_test tests/Vec2Test.cpp)
     target_link_libraries(vec2_test PRIVATE engine)
@@ -460,6 +471,21 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_SHOOT_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/ShootSystem.cpp")
     add_test(NAME debug.controls COMMAND debug_test)
     set_tests_properties(debug.controls PROPERTIES TIMEOUT 300)
+
+    # The A3 vertical slice, end to end: menu to level to a destroyed brick and back,
+    # through the production [engine::scene::PlayScene] over the committed level.
+    #
+    # No compile definitions are injected, and there is not one double in the suite: the
+    # level comes from the shipped file, the artwork from the shipped table, the nine
+    # systems from the scene's own registration order, and input from keys pressed on a
+    # real [engine::input::Input] and resolved by the real default action map. The
+    # renderer is a recording double, because the claims are about world state and a
+    # recording of the draw calls is a stronger assertion than a picture.
+    add_executable(gameplay_test tests/GameplayTest.cpp)
+    target_link_libraries(gameplay_test PRIVATE engine)
+    target_compile_options(gameplay_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    add_test(NAME gameplay.a3_vertical_slice COMMAND gameplay_test)
+    set_tests_properties(gameplay.a3_vertical_slice PROPERTIES TIMEOUT 600)
 
     # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
     #

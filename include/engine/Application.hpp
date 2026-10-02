@@ -234,6 +234,39 @@ public:
     ///        instead of waiting for a user to close the window.
     int run(std::optional<std::size_t> maxFrameCount = std::nullopt);
 
+    /// Runs the main loop, driving the keyboard from a recorded script.
+    ///
+    /// A single deliberately small seam, and it exists because of one question this
+    /// engine otherwise cannot answer at all: *"does the whole chain work in the
+    /// shipped executable, and not only in a test binary?"* Everything up to and
+    /// including the window, the asset manager, the scene factory, the systems and
+    /// the renderer is production; the only thing replaced is **which key the window
+    /// reports**, and even that goes in through the real [engine::input::Input] state
+    /// machine rather than round the back of it.
+    ///
+    /// ### The script
+    ///
+    /// ```text
+    /// P        press and release P on this frame
+    /// D:120    hold D down for the next 120 frames
+    /// .:30     advance 30 frames with nothing pressed
+    /// ```
+    ///
+    /// A token applies to the frame it is read on. `D:120` presses on this frame and
+    /// releases on the 120th, so 120 frames really are held.
+    ///
+    /// ### Why it is on Application and not on Input
+    ///
+    /// [engine::input::Input] is the window's view of the keyboard and knows nothing
+    /// about where a frame came from. This is a **composition-root** decision - what
+    /// the process pretends the player is doing - so it belongs beside `--frames` in
+    /// `main`, with the result handed to the owner. No system can reach it, no
+    /// gameplay behaviour changes, and a game that never asks for it pays nothing
+    /// beyond a string comparison per frame.
+    ///
+    /// @param script The tokens described above. Empty is the ordinary case.
+    int runWithInput(std::string_view script, std::optional<std::size_t> maxFrameCount = std::nullopt);
+
     /// The world. Entities are added here by main(), by an example, or by a
     /// future scene, never by a system.
     [[nodiscard]] ecs::EntityManager& entityManager() noexcept { return m_entityManager; }
@@ -360,6 +393,10 @@ public:
 private:
     void processEvents();
 
+    /// Feeds the recorded keyboard script into [m_input] for this frame. A no-op
+    /// when [runWithInput] was never used. See [runWithInput].
+    void applyRecordedInput();
+
     /// Applies a transition request, if one is pending. The frame boundary.
     void applyPendingTransition();
 
@@ -425,6 +462,9 @@ private:
     std::optional<scene::SceneTransition> m_pendingTransition;
 
     SceneFactory m_sceneFactory;
+
+    /// The recorded keyboard script, or empty. See [runWithInput].
+    std::string m_inputScript;
 
     bool m_isRunning = true;
 };

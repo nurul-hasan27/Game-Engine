@@ -44,49 +44,82 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
 
 namespace
 {
 
-/// Reads the optional `--frames <count>` argument.
+/// What the command line asked for.
 ///
-/// This exists so the automated smoke test can run the main loop a fixed number
-/// of times and shut down on its own, rather than waiting for a human to close the
-/// window. Without the flag the application runs until the window closes.
-std::optional<std::size_t> parseFrameLimit(const int argc, char* const argv[])
+/// Two flags and no more. `--frames` bounds the loop so a test can shut the game
+/// down on its own, and `--keys` drives the keyboard from a recorded script so the
+/// *shipped executable* can be made to play itself - which is the one thing a test
+/// binary cannot do and the reason [engine::Application::runWithInput] exists.
+struct RunOptions
+{
+    std::optional<std::size_t> frameLimit;
+    std::string inputScript;
+};
+
+/// Reads `--frames <count>` and `--keys <script>`.
+///
+/// Both exist for the automated end-to-end runs, and a human will never type either.
+/// What they are **not** is a way to change the game: `--keys` presses the same
+/// physical keys the keyboard does, through the same [engine::input::Input], and the
+/// same action layer resolves them, so a scripted run exercises the production path
+/// rather than a shortcut around it.
+///
+/// ```text
+///   --frames 300          run three hundred frames and stop
+///   --keys "P D:60 ."     press P, hold D for sixty frames, advance one more
+/// ```
+[[nodiscard]] RunOptions parseRunOptions(const int argc, char* const argv[])
 {
     constexpr std::string_view kFrameLimitFlag = "--frames";
+    constexpr std::string_view kKeysFlag = "--keys";
+
+    RunOptions options;
 
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument{argv[index]};
 
-        if (argument != kFrameLimitFlag)
+        if (argument != kFrameLimitFlag && argument != kKeysFlag)
         {
             continue;
         }
 
         if (index + 1 >= argc)
         {
-            throw std::invalid_argument{"--frames requires a value"};
+            throw std::invalid_argument{std::string{argument} + " requires a value"};
         }
 
         const std::string_view value{argv[++index]};
-        std::size_t frameCount = 0;
-        const std::from_chars_result result =
-            std::from_chars(value.data(), value.data() + value.size(), frameCount);
 
-        if (result.ec != std::errc{} || result.ptr != value.data() + value.size() || frameCount == 0)
+        if (argument == kFrameLimitFlag)
         {
-            throw std::invalid_argument{"--frames expects a positive integer"};
+            std::size_t frameCount = 0;
+            const std::from_chars_result result =
+                std::from_chars(value.data(), value.data() + value.size(), frameCount);
+
+            if (result.ec != std::errc{} || result.ptr != value.data() + value.size() || frameCount == 0)
+            {
+                throw std::invalid_argument{"--frames expects a positive integer"};
+            }
+
+            options.frameLimit = frameCount;
+            continue;
         }
 
-        return frameCount;
+        // The script's grammar belongs to [engine::Application::runWithInput],
+        // which is the only thing that has to understand it. Duplicating the rules
+        // here would be a second implementation of a rule with one implementation.
+        options.inputScript.assign(value);
     }
 
-    return std::nullopt;
+    return options;
 }
 
 } // namespace
@@ -95,7 +128,7 @@ int main(const int argc, char* const argv[])
 {
     try
     {
-        const std::optional<std::size_t> frameLimit = parseFrameLimit(argc, argv);
+        const RunOptions options = parseRunOptions(argc, argv);
 
         engine::Application application;
 
@@ -113,7 +146,7 @@ int main(const int argc, char* const argv[])
         // documented here rather than left to be rediscovered.
         application.changeScene(engine::scene::SceneId::Menu);
 
-        return application.run(frameLimit);
+        return application.runWithInput(options.inputScript, options.frameLimit);
     }
     catch (const std::exception& error)
     {
