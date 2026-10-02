@@ -41,6 +41,15 @@ Phase 19 adds four traps of its own, and each one is a mutation that a count can
   ever holds animated entities. Both loops are covered by `debug.controls`, which is the
   reason the "texture guard dropped from the plain-texture query" mutation below is a
   detection rather than an equivalence.
+
+The run is thirty-seven mutations, thirty-seven detected, none missed, none proven
+equivalent. That is a different shape from the previous two phases, and the reason is
+worth naming rather than leaving as a coincidence: **there is one pause gate**, so no
+individual system can be left running by a pause that does not work, and the
+mutations that reach those failures are the gate moving, disappearing, or being
+replaced by something that looks equivalent. Every mutation here is a mistake a person
+could plausibly make in the code as written; none of them is a second implementation
+of a rule, because this phase added no rules for anyone to re-implement.
 """
 
 import json
