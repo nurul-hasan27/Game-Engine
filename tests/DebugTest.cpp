@@ -65,6 +65,7 @@
 #include "engine/components/Rectangle.hpp"
 #include "engine/components/Text.hpp"
 #include "engine/components/Tile.hpp"
+#include "engine/components/Texture.hpp"
 #include "engine/components/Transform.hpp"
 #include "engine/debug/DebugRenderState.hpp"
 #include "engine/ecs/EntityManager.hpp"
@@ -401,6 +402,7 @@ public:
         m_draws.clear();
         m_textureDraws.clear();
         m_textDraws.clear();
+        m_order.clear();
     }
 
     void clear(const Color&) override {}
@@ -408,18 +410,21 @@ public:
     void drawRectangle(const Vec2& size, const Color& color, const RenderTransform& placement) override
     {
         m_draws.push_back(DrawCall{size, color, placement});
+        m_order.emplace_back("rectangle");
     }
 
     void drawTexture(const engine::assets::Texture& texture, const RenderTransform& placement,
                      const std::optional<IntRect>& source) override
     {
         m_textureDraws.push_back(TextureDrawCall{&texture, placement, source});
+        m_order.emplace_back(source.has_value() ? "texture-region" : "texture");
     }
 
     void drawText(const engine::assets::Font&, const std::string& content, std::uint32_t, const Color&,
                   const RenderTransform& placement) override
     {
         m_textDraws.push_back(TextDrawCall{content, placement});
+        m_order.emplace_back("text");
     }
 
     void endFrame() override { ++m_endFrames; }
@@ -430,10 +435,20 @@ public:
     [[nodiscard]] const std::vector<TextureDrawCall>& textureDraws() const noexcept { return m_textureDraws; }
     [[nodiscard]] const std::vector<TextDrawCall>& textDraws() const noexcept { return m_textDraws; }
 
+    /// What was submitted, in order, across the frame.
+    ///
+    /// Recorded because "is the overlay drawn on top of the game" is a question about
+    /// order and nothing else. Every count in the other groups is identical whichever
+    /// order the two passes run in, so an overlay pass moved in front of the ordinary
+    /// one would pass all of them - and would put every bounding box underneath the
+    /// sprite it exists to be drawn over.
+    [[nodiscard]] const std::vector<std::string>& order() const noexcept { return m_order; }
+
 private:
     std::vector<DrawCall> m_draws;
     std::vector<TextureDrawCall> m_textureDraws;
     std::vector<TextDrawCall> m_textDraws;
+    std::vector<std::string> m_order;
     std::size_t m_beginFrames = 0U;
     std::size_t m_endFrames = 0U;
 };
@@ -1152,6 +1167,97 @@ void testHidingTexturesDoesNotStopTheAnimationClock()
         }
     }
     CHECK(sawTheFrame);
+}
+
+void testTHidesAPlainTextureAsWellAsAnAnimationFrame()
+{
+    ActionDriver driver;
+    DebugFixture fixture;
+
+    // Two entities added to the level, one drawn each of the two ways an image can be
+    // submitted. `RenderSystem` has **two** separate image queries - a whole texture
+    // and an animation frame - and they are separate loops, so the toggle has to be
+    // read in both. A guard in only one of them would hide this level's plain sprites
+    // and leave every animated entity - the player, every bullet, every exploding
+    // brick - fully visible, and a suite that only ever put entities with an
+    // `Animation` in the world could not tell the difference.
+    Entity& plain = fixture.world().addEntity("debug.plain.texture");
+    plain.addComponent<Transform>(Transform{Vec2{-3000.0F, -3000.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    engine::components::Texture texture;
+    texture.assetName = "mario_ground";
+    plain.addComponent<engine::components::Texture>(texture);
+
+    Entity& animated = fixture.world().addEntity("debug.animated.frame");
+    animated.addComponent<Transform>(Transform{Vec2{-3000.0F, -3000.0F}, Vec2{0.0F, 0.0F}, Vec2{1.0F, 1.0F}, 0.0F});
+    Animation animation;
+    animation.assetName = "mario_ground_tile";
+    animation.repeat = true;
+    animated.addComponent<Animation>(animation);
+
+    fixture.renderFrame();
+
+    // Both are there: one draw with no source region, one with a region.
+    std::size_t whole = 0U;
+    std::size_t regions = 0U;
+    for (const TextureDrawCall& call : fixture.renderer().textureDraws())
+    {
+        call.source.has_value() ? ++regions : ++whole;
+    }
+    CHECK(whole == 1U);
+    CHECK(regions > 20U);
+
+    // And `T` removes both, in one press, because both loops read the same flag.
+    fixture.update(driver.pressedNow(Key::T));
+    fixture.renderFrame();
+    CHECK(fixture.renderer().textureDraws().empty());
+
+    fixture.update(driver.released(Key::T));
+    fixture.update(driver.pressedNow(Key::T));
+    fixture.renderFrame();
+
+    whole = 0U;
+    regions = 0U;
+    for (const TextureDrawCall& call : fixture.renderer().textureDraws())
+    {
+        call.source.has_value() ? ++regions : ++whole;
+    }
+    CHECK(whole == 1U);
+    CHECK(regions > 20U);
+}
+
+void testTheOverlayPassIsDrawnOnTopOfTheGame()
+{
+    ActionDriver driver;
+    DebugFixture fixture;
+    fixture.settle(driver);
+
+    fixture.update(driver.pressedNow(Key::C));
+    fixture.renderFrame();
+
+    const std::vector<std::string>& order = fixture.renderer().order();
+    CHECK(!order.empty());
+
+    // Every image in this frame comes before every box in it. A box drawn underneath
+    // the sprite it belongs to is a box nobody can see, which is the whole difference
+    // between an overlay and a second background layer - and it is invisible to every
+    // count-based assertion in this file, which is why the order is recorded.
+    std::size_t lastImage = 0U;
+    std::size_t firstBox = order.size();
+    for (std::size_t index = 0U; index < order.size(); ++index)
+    {
+        if (order[index] == "texture" || order[index] == "texture-region")
+        {
+            lastImage = index;
+        }
+        else if (order[index] == "rectangle" && firstBox == order.size())
+        {
+            firstBox = index;
+        }
+    }
+
+    CHECK(lastImage < order.size());
+    CHECK(firstBox < order.size());
+    CHECK(lastImage < firstBox);
 }
 
 void testTexturesOffDoesNotChangeTheGameAtAll()
@@ -1966,6 +2072,9 @@ int main()
         {"holding T does not flicker the textures", &testHoldingTDoesNotFlickerTheTextures},
         {"hiding textures does not stop the animation clock",
          &testHidingTexturesDoesNotStopTheAnimationClock},
+        {"T hides a plain texture as well as an animation frame",
+         &testTHidesAPlainTextureAsWellAsAnAnimationFrame},
+        {"the overlay pass is drawn on top of the game", &testTheOverlayPassIsDrawnOnTopOfTheGame},
         {"textures off does not change the game at all", &testTexturesOffDoesNotChangeTheGameAtAll},
         // C. Bounding boxes
         {"C draws one box per collider at the collider's own size",
