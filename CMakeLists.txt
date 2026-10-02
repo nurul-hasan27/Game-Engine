@@ -190,6 +190,7 @@ add_library(engine STATIC
             src/engine/math/Vec2.cpp
             src/engine/systems/AnimationSystem.cpp
             src/engine/systems/CameraSystem.cpp
+            src/engine/systems/DebugRenderSystem.cpp
             src/engine/systems/LifetimeSystem.cpp
             src/engine/systems/MovementSystem.cpp
             src/engine/physics/Collision.cpp
@@ -424,6 +425,41 @@ if(ENGINE_BUILD_TESTS)
         ENGINE_COMMITTED_LEVEL_FILE="${ENGINE_LEVEL_FILE}")
     add_test(NAME combat.tiles COMMAND combat_test)
     set_tests_properties(combat.tiles PROPERTIES TIMEOUT 300)
+
+    # Debug controls: the pause and the three rendering toggles, and Escape.
+    #
+    # Every group drives a **real** [engine::scene::PlayScene] built over the real
+    # committed level, pressing real keys through the real default action map, and
+    # reads what came out: a stopped world, a changed set of draw calls, a requested
+    # scene transition. A recording renderer is used rather than a window, because the
+    # claim being made is about *which draws were submitted* - and a screenshot of a
+    # magenta box would assert far less than "one rectangle, at the collider's own
+    # size, was submitted for every collider and for nothing else".
+    #
+    # The few things no run-time test can observe are checked in the source, and only
+    # those: that a scene and a debug renderer name no SFML type and no physical key,
+    # that the debug layer holds no static storage, and that no gameplay system asks
+    # about pause or a debug flag.
+    add_executable(debug_test tests/DebugTest.cpp)
+    target_link_libraries(debug_test PRIVATE engine)
+    target_compile_options(debug_test PRIVATE ${ENGINE_WARNING_FLAGS})
+    target_compile_definitions(debug_test PRIVATE
+        ENGINE_DEBUG_STATE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/debug/DebugRenderState.hpp"
+        ENGINE_DEBUG_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/DebugRenderSystem.hpp"
+        ENGINE_DEBUG_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/DebugRenderSystem.cpp"
+        ENGINE_PLAY_SCENE_HEADER="${PROJECT_SOURCE_DIR}/include/engine/scene/PlayScene.hpp"
+        ENGINE_PLAY_SCENE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/scene/PlayScene.cpp"
+        ENGINE_MENU_SCENE_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/scene/MenuScene.cpp"
+        ENGINE_RENDER_SYSTEM_HEADER="${PROJECT_SOURCE_DIR}/include/engine/systems/RenderSystem.hpp"
+        ENGINE_RENDER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/RenderSystem.cpp"
+        ENGINE_PLAYER_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/PlayerSystem.cpp"
+        ENGINE_PHYSICS_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/PhysicsSystem.cpp"
+        ENGINE_LIFETIME_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/LifetimeSystem.cpp"
+        ENGINE_ANIMATION_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/AnimationSystem.cpp"
+        ENGINE_TILE_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/TileSystem.cpp"
+        ENGINE_SHOOT_SYSTEM_SOURCE="${PROJECT_SOURCE_DIR}/src/engine/systems/ShootSystem.cpp")
+    add_test(NAME debug.controls COMMAND debug_test)
+    set_tests_properties(debug.controls PROPERTIES TIMEOUT 300)
 
     # Level: the file format, the 64px grid conversion, and the spawn into the ECS.
     #

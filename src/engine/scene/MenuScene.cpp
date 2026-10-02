@@ -159,6 +159,35 @@ void MenuScene::onUpdate(const input::ActionState& actions, const float deltaSec
         }
     }
 
+    // ### Escape quits here, and it is the second half of the course's sentence
+    //
+    // Assignment 3: *"The 'ESC' key should go 'back' to the Main Menu, or quit if
+    // on the Main Menu"*. A level has somewhere to go back to; the main menu does
+    // not, and the same sentence says what happens instead. So `Quit` - the action
+    // the action layer already bound to `Escape` - means "leave the game" here,
+    // while [engine::scene::PlayScene] reads the very same action as "go back".
+    //
+    // Read on the press edge like everything else, and **after** the confirmation
+    // above on purpose: `Escape` and `Space` are different keys, so the order is
+    // not about which one won, and the last request in a frame is the one honoured
+    // ([engine::scene::Scene::requestTransition]). If this block came first, a
+    // future key that drove both would quit instead of starting the game.
+    //
+    // It is a request, exactly like the menu's own QUIT option above, so nothing
+    // here closes a window or touches the application: the scene says what it wants
+    // and [engine::Application] decides when to honour it. There is deliberately no
+    // `Application::close()` to call - the owner is not reachable from a scene, and
+    // [engine::scene::SceneTransition::quitApplication] is the whole of what a
+    // scene may say about the application's lifetime.
+    //
+    // The action layer documents `Quit` as *"Deliberately not acted on by
+    // Application"*, which this is consistent with: the engine reports Escape, and
+    // the **game** decides what it means. Here the game has decided.
+    if (actions.wasPressed(input::Action::Quit))
+    {
+        requestTransition(SceneTransition::quitApplication());
+    }
+
     refreshSelection();
 }
 

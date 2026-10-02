@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/debug/DebugRenderState.hpp"
 #include "engine/ecs/System.hpp"
 #include "engine/graphics/Camera.hpp"
 #include "engine/graphics/Renderer.hpp"
@@ -29,6 +30,16 @@ namespace engine::systems
 /// skipped, because the query already filters both. There is no special case
 /// here, and no error: "has no renderable component" is the normal way for an
 /// entity to exist.
+///
+/// ### One thing it reads that is not in the world: the texture toggle
+///
+/// [debugRenderState] is the only state this system holds beyond its three
+/// borrowed references, and it holds it because this is where the question is
+/// answered. Suppressing an image is a decision about *drawing*, so it is made by
+/// the thing that draws and not by a component a gameplay system would have to
+/// write. Nothing else about the pass changes: the entities, their components and
+/// the frame each of them is on are untouched, so the game is running normally
+/// behind an overlay.
 ///
 /// ### World in, screen out
 ///
@@ -80,6 +91,31 @@ public:
 
     [[nodiscard]] const char* name() const override { return "RenderSystem"; }
 
+    /// The debug state this system reads when it submits draws.
+    ///
+    /// ### Why the render system holds it rather than being handed it
+    ///
+    /// It is this system's **own configuration**, and it is a plain value rather
+    /// than a borrowed reference for the same reason the renderer and the camera are
+    /// references: they outlive this system and it does not own them. A bool does not.
+    ///
+    /// The owner in practice is [engine::scene::PlayScene], which reaches through
+    /// here because *this is where the answer is used*: no other object decides
+    /// whether textures are drawn, so there is nothing for the scene to disagree
+    /// with. [engine::systems::DebugRenderSystem] borrows the very same object, so
+    /// one state says both "draw the overlays" and "draw the game underneath them"
+    /// for the same frame.
+    ///
+    /// ### Why the default is the game's own look
+    ///
+    /// A freshly built system draws textures and draws no overlays, which is what
+    /// [engine::debug::DebugRenderState] documents. A render system built by
+    /// [engine::Application] for its scene-less mode therefore behaves exactly as it
+    /// always has, and the debug controls are a scene's business rather than a new
+    /// requirement on every caller.
+    [[nodiscard]] debug::DebugRenderState& debugRenderState() noexcept { return m_debug; }
+    [[nodiscard]] const debug::DebugRenderState& debugRenderState() const noexcept { return m_debug; }
+
 private:
     graphics::Renderer* m_renderer = nullptr;
     const graphics::Camera* m_camera = nullptr;
@@ -92,6 +128,13 @@ private:
     /// Bound once in the constructor and never rebound, which is what lets the
     /// `Application` member order guarantee the manager outlives this system.
     const assets::AssetManager& m_assets;
+
+    /// The three rendering toggles, owned. See [debugRenderState] for why a value
+    /// and not a reference, and why the owner in practice is a scene.
+    ///
+    /// Trivially copyable and default-constructible by construction, so a render
+    /// system that nobody has configured draws the game rather than nothing.
+    debug::DebugRenderState m_debug{};
 };
 
 } // namespace engine::systems

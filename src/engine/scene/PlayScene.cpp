@@ -118,6 +118,10 @@ void addTextLabel(ecs::EntityManager& world, std::string content, const Vec2 pos
 
 PlayScene::PlayScene(const SceneContext& context)
     : Scene{context}, m_renderSystem{context.renderer(), context.camera(), context.assets()},
+      // Borrows the state **inside** `m_renderSystem`, which is already constructed
+      // because of the declaration order above. One object, so the ordinary render
+      // pass and the overlay pass cannot disagree about this frame.
+      m_debugRenderSystem{context.renderer(), context.camera(), m_renderSystem.debugRenderState()},
       // The one place an integer cell count becomes the float a grid is built from.
       // The count is whole because a cell is, and the multiplication by kCellSize
       // that follows is the grid's business, not the configuration's.
@@ -258,9 +262,87 @@ void PlayScene::onUpdate(const input::ActionState& actions, const float deltaSec
     // already bound to `Escape`.
     //
     // Recorded as a request rather than performed: the scene cannot replace itself.
+    //
+    // Deliberately the *first* thing read, and deliberately above the pause gate
+    // below. "Go back" has to work in a stopped game: a player who pauses and then
+    // wants out would otherwise have to unpause first, and Escape is the one control
+    // that must never be swallowed by anything the scene is doing.
     if (actions.wasPressed(input::Action::Quit))
     {
         requestTransition(SceneTransition::to(SceneId::Menu));
+    }
+
+    // ---- The debug controls, and the order they are read in --------------------
+    //
+    // All of them are read on the **press edge**, and all of them are read **before**
+    // the pause gate. Those are the two decisions the whole of this block exists for.
+    //
+    // `wasPressed` rather than `isActive`, because a toggle wants one press. Holding
+    // `P` would otherwise pause and unpause sixty times a second and the game would
+    // appear to flicker; holding `T` would flash between pictures. The action layer
+    // keeps both questions precisely so that a toggle can ask the right one - see
+    // [engine::input::ActionState::wasPressed], which is what makes this a decision
+    // rather than a consequence.
+    //
+    // Before the pause gate, because a debugging control that only works while the
+    // game is running is barely a debugging control. `P`, `T`, `C` and `G` all have
+    // to work in a frozen frame - and they do, because the gate is *below* this
+    // block, so a paused frame still evaluates it.
+    debug::DebugRenderState& debug = m_renderSystem.debugRenderState();
+
+    if (actions.wasPressed(input::Action::ToggleTextures))
+    {
+        debug.showTextures = !debug.showTextures;
+    }
+
+    if (actions.wasPressed(input::Action::ToggleBoundingBoxes))
+    {
+        debug.showBoundingBoxes = !debug.showBoundingBoxes;
+    }
+
+    if (actions.wasPressed(input::Action::ToggleGrid))
+    {
+        debug.showGrid = !debug.showGrid;
+    }
+
+    // The course: "The 'P' key should pause the game." One bool, toggled here and
+    // read in exactly one place - the gate below.
+    if (actions.wasPressed(input::Action::Pause))
+    {
+        m_paused = !m_paused;
+    }
+
+    // ---- THE pause gate -------------------------------------------------------
+    //
+    // This is the orchestration boundary, and it is deliberately **one** `if` rather
+    // than a check inside every system.
+    //
+    // The alternative - nine systems each asking "am I paused?" - would put a
+    // debug-specific early return in the middle of [engine::systems::PhysicsSystem]'s
+    // integration, of [engine::systems::LifetimeSystem]'s countdown and of
+    // [engine::systems::AnimationSystem]'s frame advance. Any of them forgotten is a
+    // bug with no symptom you can name: the world half-moves, or a coin expires
+    // while the game is stopped, and neither looks like pause at all. One branch
+    // cannot be half-applied.
+    //
+    // It also settles the question of what pause means, and the answer is
+    // "**nothing in the world advances**": gravity, the walk, the jump, bullets, the
+    // lifetime countdown, the explosion frame and the camera all stop together,
+    // because none of them runs. It is not a special case in each of them; it is the
+    // absence of the call.
+    //
+    // Rendering is untouched. [Scene::render] is not this function, `Application`
+    // does not consult this flag, and the frame still goes out - so a paused game
+    // stays visible, which is the only version of pause anybody can use to see what
+    // they paused.
+    //
+    // The deferred-destruction flush is inside the branch too, and for the same
+    // reason: while the world is frozen nothing flags an entity for destruction, so
+    // there is nothing to flush, and skipping it keeps "the world did not change"
+    // true of the world as a whole rather than of its components alone.
+    if (m_paused)
+    {
+        return;
     }
 
     m_systems.update(m_world, actions, deltaSeconds);
@@ -277,7 +359,24 @@ void PlayScene::render()
 {
     // The empty snapshot again, because a render pass reads no input and the render
     // system reads none either.
+    //
+    // **Two** passes, and the order is the point. The ordinary pass draws the game;
+    // [engine::systems::DebugRenderSystem] then draws the overlays on top of it.
+    // An overlay that went underneath would be invisible wherever it mattered -
+    // a collider box inside a sprite is a box you cannot see - and an overlay is
+    // only worth having when it is on top.
+    //
+    // Neither pass is in the [engine::ecs::SystemManager], for the reason
+    // [engine::systems::RenderSystem] is not either: a render pass has to be
+    // bracketed by `beginFrame` and `endFrame` and has to run after every simulation
+    // system. The scene owns its own render pass rather than the application
+    // driving it, because the scene owns its own world.
+    //
+    // Note what is *not* here: no reference to [m_paused](PlayScene.hpp). The
+    // picture of a paused world is the picture of a stopped world, and the two
+    // passes above already produce it.
     m_renderSystem.update(m_world, m_noActions, 0.0F);
+    m_debugRenderSystem.update(m_world, m_noActions, 0.0F);
 }
 
 } // namespace engine::scene

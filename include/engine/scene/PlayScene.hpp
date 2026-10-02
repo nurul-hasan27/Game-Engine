@@ -1,9 +1,11 @@
 #pragma once
 
+#include "engine/debug/DebugRenderState.hpp"
 #include "engine/ecs/EntityManager.hpp"
 #include "engine/ecs/SystemManager.hpp"
 #include "engine/level/LevelGrid.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/systems/DebugRenderSystem.hpp"
 #include "engine/systems/RenderSystem.hpp"
 
 namespace engine::scene
@@ -38,6 +40,56 @@ namespace engine::scene
 /// decoration; a decoration has no body, so physics would integrate it and the
 /// scenery would slide around the screen. Making the player move needs a movement
 /// system that knows which entity is the player, and that is the next phase's job.
+///
+/// ### The debug controls, and where they live
+///
+/// The course's Assignment 3 asks for five keys in this scene, and this class is
+/// where all five are honoured:
+///
+/// | Key | Action | What it does here |
+/// | --- | ------ | ----------------- |
+/// | `P` | [input::Action::Pause] | freezes and unfreezes the simulation |
+/// | `T` | [input::Action::ToggleTextures] | suppresses entity images |
+/// | `C` | [input::Action::ToggleBoundingBoxes] | draws every collider box |
+/// | `G` | [input::Action::ToggleGrid] | draws the 64-pixel level grid |
+/// | `ESC` | [input::Action::Quit] | asks for the menu scene |
+///
+/// Four of the five are *this* class's business rather than a system's, and the
+/// reason is the same for all of them: **a debug control is a decision, not a rule.**
+/// A system cannot decide whether the game is paused, because it has no way to stop
+/// the systems after it; it can only decide something inside its own frame. So the
+/// flags live here, in the one object that owns the frame, and the only two things
+/// that ever read them are the two renderers.
+///
+/// ### Pause is one branch here and not a flag in nine systems
+///
+/// [paused](PlayScene.hpp) is a single `bool` read in exactly one place - the gate
+/// between the debug controls and [m_systems](PlayScene.hpp) - because that is the
+/// only place from which "do not simulate this frame" can be said without every
+/// gameplay system growing a debug-specific early return. No system below knows
+/// pause exists: [engine::systems::PhysicsSystem] integrates, [engine::systems::LifetimeSystem]
+/// counts and [engine::systems::AnimationSystem] advances unconditionally, exactly as
+/// they do when the game is running, and the scene simply does not call them.
+///
+/// ### The render state is the render system's, and that is where the answer is
+///
+/// The three rendering flags are reached through
+/// [debugRenderState](PlayScene.hpp), which is a forwarding accessor onto
+/// [engine::systems::RenderSystem]'s own state. It is not a member here because that
+/// would leave two objects with three flags between them and no single answer to
+/// "are the overlays on this frame" - and the renderer and the debug renderer must
+/// agree about it. See
+/// [engine::debug::DebugRenderState](engine/debug/DebugRenderState.hpp).
+///
+/// ### Scene lifetime is the whole of the reset story
+///
+/// There is no `reset()` and nothing to un-toggle. The flags are members of this
+/// object, and [engine::Application] destroys the scene on every transition, so
+/// coming back to the menu and starting again builds a new scene with textures on,
+/// no overlays and no pause - which is what "a fresh gameplay session" means when
+/// the world is rebuilt from the level file on every entry. See
+/// [engine::scene::SceneTransition] for why the old scene really is gone rather
+/// than merely forgotten.
 class PlayScene final : public Scene
 {
 public:
@@ -90,6 +142,25 @@ public:
     /// The scene's own systems, for tests that want to count them.
     [[nodiscard]] const ecs::SystemManager& systems() const noexcept { return m_systems; }
 
+    /// Whether the simulation is currently frozen by the pause control.
+    ///
+    /// Read by tests, and reported rather than assumed: the useful claim is not
+    /// "the flag is true" but "the player did not move while it was true", and that
+    /// needs the flag to be observable next to the world it stopped.
+    [[nodiscard]] bool paused() const noexcept { return m_paused; }
+
+    /// The three rendering toggles, on the scene's own render system.
+    ///
+    /// A forwarding accessor rather than a member, because the object that answers
+    /// "are textures drawn" is the render system - it is where the answer is used -
+    /// and [engine::systems::DebugRenderSystem] is given that same object to read.
+    /// One state, one answer, two renderers that cannot disagree.
+    [[nodiscard]] debug::DebugRenderState& debugRenderState() noexcept { return m_renderSystem.debugRenderState(); }
+    [[nodiscard]] const debug::DebugRenderState& debugRenderState() const noexcept
+    {
+        return m_renderSystem.debugRenderState();
+    }
+
     /// How tall the world this scene builds is, in cells.
     ///
     /// Read from the engine's configuration rather than hard-coded here, so the
@@ -106,9 +177,29 @@ private:
     /// world and a render system borrows the renderer and the camera.
     engine::systems::RenderSystem m_renderSystem;
 
+    /// Declared after [m_renderSystem](PlayScene.hpp) because it **borrows that
+    /// object's** debug state, so the state has to exist before this is built. That
+    /// is also what makes it safe on the way out: destruction is the reverse, so the
+    /// debug renderer is destroyed first, while the state it points at is still
+    /// alive.
+    engine::systems::DebugRenderSystem m_debugRenderSystem;
+
     /// The empty action snapshot a render pass submits, because
     /// [engine::systems::RenderSystem] reads no input and a render pass has none to give.
     input::ActionState m_noActions;
+
+    /// Whether the simulation is frozen, and the only thing pause is.
+    ///
+    /// A plain member of the scene, not a global and not a component, which is what
+    /// makes "pause does not survive into the next level" a structural fact rather
+    /// than something to remember: [engine::Application] destroys this object on
+    /// every transition.
+    ///
+    /// Not part of [engine::debug::DebugRenderState], because it is not a rendering
+    /// fact. It says whether the world is being simulated, which is a different
+    /// question from what the world looks like - the render state is still read
+    /// while paused, so the overlays can be switched on and off in a stopped game.
+    bool m_paused = false;
 
     float m_cellsTall;
 };

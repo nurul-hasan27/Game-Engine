@@ -77,6 +77,24 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, const input::Act
             continue;
         }
 
+        // ### The texture toggle, and why it is here and nowhere else
+        //
+        // This is the only place in the engine that submits an image, so this is
+        // the only place that can answer "are textures being drawn". The course's
+        // Assignment 3 asks for the `T` key to *"toggle drawing textures"*, and the
+        // decision belongs to whatever performs the draw rather than to a caller
+        // that would otherwise have to be trusted to have filtered the world first.
+        //
+        // It suppresses the draw and nothing else: the component stays, the entity
+        // stays, the animation system keeps advancing it, and the frame is still
+        // recorded - so switching textures back on shows the entity at the frame it
+        // has actually reached. See [DebugRenderState] for why that is a value on
+        // this system rather than a flag somewhere in the world.
+        if (!m_debug.showTextures)
+        {
+            continue;
+        }
+
         // Same conversion as the rectangle above, so a texture and a rectangle
         // with the same Transform land identically, zoom included. A name that is
         // not declared throws from the lookup, and is deliberately not caught: an
@@ -112,6 +130,17 @@ void RenderSystem::update(engine::ecs::EntityManager& entities, const input::Act
     for (auto&& [entity, transform, animation] : entities.query<components::Transform, components::Animation>())
     {
         static_cast<void>(entity);
+
+        // An animation frame is an image with a source region, so it is exactly the
+        // thing the `T` key turns off - and it has to be turned off **here** as well
+        // as in query 2, or `T` would hide a plain sprite and leave every animated
+        // entity in the level - the player, every bullet, every exploding brick -
+        // fully visible. The two queries are separate, so the answer is read twice;
+        // that is deliberate duplication rather than a missed case.
+        if (!m_debug.showTextures)
+        {
+            continue;
+        }
 
         // Two steps, and deliberately so. The animation says which image and how
         // it is divided; the texture it names is a separate asset, looked up by
