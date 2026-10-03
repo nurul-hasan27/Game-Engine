@@ -1185,8 +1185,22 @@ void testTheCommittedLevelCarriesWhatTheSliceNeeds()
     CHECK(tileCount(game.world(), TileType::Solid) == 24U);
     CHECK(tileCount(game.world(), TileType::Brick) == 2U);
 
+    // ### Both tags are **named** strings, and the Release build is why
+    //
+    // `EntityView` holds its tag as a `std::string_view` and `getEntities` forwards its
+    // parameter straight into it, so a temporary leaves the view pointing at a string
+    // that died at the end of the same full expression. The Debug build happened to
+    // work, because the freed block still held the bytes; the Release build did not,
+    // and both loops silently found nothing.
+    //
+    // `MenuScene::refreshSelection` documents the same trap in the place it was found
+    // in Phase 15, and this is the third time - which is why it is written down here as
+    // well as being fixed.
+    const std::string decorationTag{engine::level::kDecorationTag};
+    const std::string playerTag{engine::level::kPlayerTag};
+
     std::size_t decorations = 0U;
-    for (const Entity& entity : game.world().getEntities(std::string{engine::level::kDecorationTag}))
+    for (const Entity& entity : game.world().getEntities(decorationTag))
     {
         ++decorations;
         // A decoration is drawn and never touched, and the components it does not
@@ -1199,7 +1213,7 @@ void testTheCommittedLevelCarriesWhatTheSliceNeeds()
 
     // One player, and it is the level's.
     std::size_t players = 0U;
-    for (const Entity& entity : game.world().getEntities(std::string{engine::level::kPlayerTag}))
+    for (const Entity& entity : game.world().getEntities(playerTag))
     {
         ++players;
         static_cast<void>(entity);
