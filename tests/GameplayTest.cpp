@@ -848,9 +848,20 @@ void testFallingOutOfTheWorldRespawnsThePlayer()
     const Vec2 spawn = playerTransform(game.world()).position;
     const Vec2 left = playerOf(game.world()).getComponent<Player>().spawnPosition;
 
-    // Drop the player below the floor, which is what the gap in the committed level's
-    // bottom row does to anybody who walks into it. The fall limit is the world's
-    // bottom edge, measured from the grid this scene built.
+    // Run left first, so the player is **facing left** when they die. A respawn that
+    // only put the player back where they were and left them facing the way they
+    // happened to be running would be a real defect, and the first version of this
+    // group could not see it: the player had never moved, so their facing was already
+    // right and restoring it was a no-op.
+    game.update(keys.press(Key::A));
+    game.renderFrame();
+    game.run(keys.held(), 20);
+    keys.letGo(Key::A);
+    CHECK_NEAR(playerTransform(game.world()).scale.x, -1.0F, 0.0001F);
+
+    // Now drop the player below the floor, which is what the gap in the committed
+    // level's bottom row does to anybody who walks into it. The fall limit is the
+    // world's bottom edge, measured from the grid this scene built.
     playerTransform(game.world()).position = Vec2{left.x, kWorldHeight + 200.0F};
     playerTransform(game.world()).velocity = Vec2{0.0F, 0.0F};
     game.update(keys.idle());

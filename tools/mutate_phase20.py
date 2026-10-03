@@ -132,8 +132,15 @@ mutation(
     [patch(APP_C,
            "        processEvents();\n\n        if (!m_isRunning)\n        {\n            break; // the window was closed while we were handling events\n        }\n\n        // Where a frame's keyboard comes from. Empty in every ordinary run, and the\n        // one branch is the whole cost.\n        applyRecordedInput();",
            "        // MUTATION: the script is fed before the real events\n        applyRecordedInput();\n\n        processEvents();\n\n        if (!m_isRunning)\n        {\n            break; // the window was closed while we were handling events\n        }")],
+    equivalent="In every run this harness performs the window receives no keyboard events "
+               "at all - there is nobody at the keyboard and the script is the only input - "
+               "so `processEvents` contributes nothing to `Input` and the two orders leave "
+               "identical state on every frame. It is NOT equivalent in general: with a key "
+               "physically held, feeding the script first lets a real `processKeyUp` clear "
+               "it while feeding it second lets the script's press-release win. No automated "
+               "environment can tell those apart, so the production order is written into "
+               "Application.hpp rather than left to a test that could not see it either way.",
 )
-
 # ---------------------------------------------------------------------------
 # System order - the phase's central failure mode
 # ---------------------------------------------------------------------------
