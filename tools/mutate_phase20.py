@@ -84,7 +84,13 @@ mutation(
     "scripted ctest exists at all: a hold that is really a tap still runs the whole "
     "script and still exits zero, so nothing about the program's *behaviour* would "
     "change - only whether the recorded sequence meant what it said.",
-    [patch(APP_C, 'std::to_string(count - 1U)', 'std::to_string(0U) // MUTATION: one frame, not a hold')],
+    # The comment goes on its own line rather than at the end of this one, because the
+    # statement's semicolon is on this line and a trailing comment would eat it. That is
+    # the whole reason the first version of this mutation was BUILD_REJECTED.
+    [patch(APP_C,
+           "        const std::string next = std::string{name} + \":\" + std::to_string(count - 1U);",
+           "        // MUTATION: a hold that is really a single frame\n"
+           "        const std::string next = std::string{name} + \":\" + std::to_string(0U);")],
 )
 
 mutation(
@@ -108,12 +114,21 @@ mutation(
 mutation(
     "recorded-keys-are-applied-before-events",
     "The recorded script is fed to `Input` before `processEvents()` rather than after.",
-    "Nothing in the suite, and that is the point of putting it in this harness.\n"
+    "PROVEN EQUIVALENT for every run this harness can make, and the proof is the whole "
+    "point of recording it.\n"
     "\n"
-    "`Application::processEvents` forwards real window events into the same `Input`, so "
-    "a key that arrived this frame could overwrite the script's - and on a machine with "
-    "no keyboard traffic, the two orders are indistinguishable. The order is stated in "
-    "`Application.hpp` instead.",
+    "`Application::processEvents` forwards real window events into the same `Input`. In "
+    "every run this harness performs, the window receives **no keyboard events at all** - "
+    "there is nobody at the keyboard, and the only input in the frame is the script's - "
+    "so `processEvents` contributes nothing to `m_input` and the two orders produce "
+    "byte-identical input state for every frame.\n"
+    "\n"
+    "It is **not** equivalent in general, and the reason it is here rather than omitted "
+    "is that difference: with a key physically held, feeding the script first lets the "
+    "real `processKeyUp` clear it, while feeding it second lets the script's own "
+    "press-release win. No automated environment can tell those apart, so the production "
+    "order is written down in `Application.hpp` rather than left to a test that could not "
+    "see it either way.",
     [patch(APP_C,
            "        processEvents();\n\n        if (!m_isRunning)\n        {\n            break; // the window was closed while we were handling events\n        }\n\n        // Where a frame's keyboard comes from. Empty in every ordinary run, and the\n        // one branch is the whole cost.\n        applyRecordedInput();",
            "        // MUTATION: the script is fed before the real events\n        applyRecordedInput();\n\n        processEvents();\n\n        if (!m_isRunning)\n        {\n            break; // the window was closed while we were handling events\n        }")],
@@ -157,22 +172,20 @@ mutation(
 )
 
 mutation(
-    "player-state-system-before-physics",
-    "`PlayerStateSystem` is registered before the physics step, so the player's grounded "
-    "flag is a frame behind the collisions that set it.",
-    "gameplay.a3_vertical_slice: *the player jumps and lands on the same floor* and "
-    "*falling out of the world respawns the player*.\n"
+    "player-state-system-not-registered",
+    "`PlayerStateSystem` is not registered, so the player's `grounded` flag and state are "
+    "whatever they were at spawn.",
+    "gameplay.a3_vertical_slice: *the player jumps and lands on the same floor* - the jump "
+    "gate reads `grounded`, which is still the spawn value - and *falling out of the world "
+    "respawns the player*, and scene.lifecycle's system count and order.\n"
     "\n"
-    "The lag is invisible in a frame count and lethal in a game: a player whose grounded "
-    "flag is always one frame late cannot be jumped from reliably, because the jump gate "
-    "reads it.",
-    [patch(PLAY_C, "    const engine::systems::PhysicsSystem& physics = m_systems.add<engine::systems::PhysicsSystem>();\n", ""),
-     patch(PLAY_C,
-           "    m_systems.add<engine::systems::TileSystem>(physics.collisions(), context.assets());",
-           "    // MUTATION: the grounded flag is read a frame early\n"
-           "    m_systems.add<engine::systems::PlayerStateSystem>(physics.collisions());\n"
-           "    m_systems.add<engine::systems::PhysicsSystem>();\n"
-           "    m_systems.add<engine::systems::TileSystem>(physics.collisions(), context.assets());")],
+    "It began as `player-state-system-before-physics`, which is the mutation the phase "
+    "brief asks for by name, and it is unrepresentable rather than merely hard: the system "
+    "reads the report *physics* publishes, so registering it first means either a report "
+    "that does not exist yet or a second physics system. Which is the finding: with one "
+    "report, \"before physics\" is not a mistake this engine can make. Removing it is the "
+    "next-closest real one.",
+    [patch(PLAY_C, "    m_systems.add<engine::systems::PlayerStateSystem>(physics.collisions());\n", "")],
 )
 
 mutation(
@@ -365,19 +378,39 @@ mutation(
 # ---------------------------------------------------------------------------
 
 mutation(
-    "the-second-level-inherits-the-firsts-state",
-    "`PlayScene` seeds its pause flag from a value another scene left behind.",
-    "gameplay.a3_vertical_slice's *returning to the menu and starting again rebuilds the "
-    "level*, and debug.controls' *a new level starts unpaused with the game's own look*.\n"
+    "a-respawn-does-not-restore-the-facing",
+    "`PlayerSystem`'s respawn leaves the player's facing as it was, so a respawn after "
+    "running left leaves the player facing left.",
+    "gameplay.a3_vertical_slice: *falling out of the world respawns the player*, which "
+    "resets `scale.x` and reads it back, and player.behaviour's respawn groups.\n"
     "\n"
-    "Written as a member initialiser reading another instance's state rather than as a "
-    "`static`, because that is the more plausible half of the mistake and it compiles "
-    "in the same way.",
+    "The first version of this mutation tried to make the *scene* inherit the flag from a "
+    "previous scene, which is not valid C++ - `m_paused` is declared after the thing that "
+    "would read it. Phase 19 already covers the shared-flag mistake properly; this is "
+    "the integration-level leak instead, and it is one a real run hits every time a "
+    "player falls.",
+    [patch(f"{SRC}/systems/PlayerSystem.cpp",
+           "    transform.scale = Vec2{1.0F, 1.0F};",
+           "    // MUTATION: the facing survives a respawn\n"
+           "    transform.scale.x = std::abs(transform.scale.x);")],
+)
+
+mutation(
+    "the-camera-system-is-not-registered",
+    "`CameraSystem` is not registered, so the view never follows the player.",
+    "gameplay.a3_vertical_slice's camera groups and its *the whole chain in one pass*, and "
+    "scene.lifecycle's system count and order.\n"
+    "\n"
+    "A camera that does not move still renders a world - the same entities, at their own "
+    "positions - so every drawing assertion in the repository passes. Only a comparison "
+    "between the camera and the player can see it.",
     [patch(PLAY_C,
-           "      // The one place an integer cell count becomes the float a grid is built from.",
-           "      // MUTATION: the flag is inherited from the scene that was here before\n"
-           "      , m_paused{PlayScene{}.paused()}\n"
-           "      // The one place an integer cell count becomes the float a grid is built from.")],
+           "    m_systems.add<engine::systems::CameraSystem>(context.camera(), std::string{level::kPlayerTag});\n"
+           "    // Local class, not an engine one - see its own documentation above.\n"
+           "    m_systems.add<ZoomKeysSystem>(context.camera());\n",
+           "    // MUTATION: the view never follows anybody\n"
+           "    // Local class, not an engine one - see its own documentation above.\n"
+           "    m_systems.add<ZoomKeysSystem>(context.camera());\n")],
 )
 
 # ---------------------------------------------------------------------------

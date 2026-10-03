@@ -251,6 +251,17 @@ if(ENGINE_BUILD_TESTS)
     add_test(NAME application.scripted_playthrough
              COMMAND game --frames 600 --keys "space .:90 D:120 space .:60 C G .:300")
     set_tests_properties(application.scripted_playthrough PROPERTIES TIMEOUT 120)
+    # The script has to have **done** something, and a level loading is the fact that
+    # says so.
+    #
+    # Without this, a `--keys` implementation that parses the script and drops it
+    # would pass: the game would still run to its frame limit and still exit zero,
+    # because exiting cleanly is all an exit code says. [engine::scene::PlayScene]
+    # reports what it loaded on `stderr` - a line that has existed since Phase 13 - and
+    # `PASS_REGULAR_EXPRESSION` matches the test's whole output, so the assertion is
+    # that the scripted run reached a level rather than merely that it finished.
+    set_tests_properties(application.scripted_playthrough PROPERTIES
+                         PASS_REGULAR_EXPRESSION "Loaded [0-9]+ tiles")
 
     # Math test: engine::Vec2, which is SFML independent.
     add_executable(vec2_test tests/Vec2Test.cpp)
