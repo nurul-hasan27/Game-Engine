@@ -5,6 +5,7 @@
 #include "engine/input/SfmlKeyMap.hpp"
 #include "engine/math/Vec2.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <string_view>
@@ -186,14 +187,35 @@ void Application::applyRecordedInput()
     m_inputScript.erase(0, begin);
 
     const std::size_t end = m_inputScript.find(' ');
-    const std::string_view token{end == std::string::npos ? m_inputScript : m_inputScript.substr(0, end)};
+
+    // A `string_view` over the member's own bytes, **not** over a temporary.
+    //
+    // `m_inputScript.substr(0, end)` returns a `std::string` by value, and a view built
+    // from it would point at memory that died at the end of the declaration - which is
+    // the same trap [engine::ecs::EntityView] has been caught by twice in this
+    // repository, and the reason AddressSanitizer found this line before anything else
+    // did. `data()` plus a length says what is meant and means it.
+    const std::string_view token = end == std::string::npos
+                                       ? std::string_view{m_inputScript}
+                                       : std::string_view{m_inputScript.data(), end};
 
     const std::size_t colon = token.find(':');
     const std::string_view name = token.substr(0, colon);
     std::size_t count = 1U;
     if (colon != std::string_view::npos)
     {
-        count = std::strtoul(std::string{token.substr(colon + 1U)}.c_str(), nullptr, 10);
+        // The digits, copied into a buffer `strtoul` can read. `std::from_chars`
+        // would read the view in place, and it is the better call - but it would be a
+        // second way of parsing a number in a file that already has one, and the copy
+        // is four bytes of stack on a path that runs at most once per token.
+        char digits[16]{};
+        const std::string_view number = token.substr(colon + 1U);
+        const std::size_t copied = std::min(number.size(), sizeof(digits) - 1U);
+        for (std::size_t index = 0U; index < copied; ++index)
+        {
+            digits[index] = number[index];
+        }
+        count = std::strtoul(digits, nullptr, 10);
     }
 
     const input::Key key = toKey(name);
