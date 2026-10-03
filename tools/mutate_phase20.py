@@ -80,10 +80,21 @@ mutation(
     "checks its exit code, and `gameplay.a3_vertical_slice` is unaffected because it "
     "drives keys directly.\n"
     "\n"
-    "The mutation that would be invisible to any behavioural group, and the reason the "
-    "scripted ctest exists at all: a hold that is really a tap still runs the whole "
-    "script and still exits zero, so nothing about the program's *behaviour* would "
-    "change - only whether the recorded sequence meant what it said.",
+    "UNDETECTED, and recorded as such rather than dropped, because the reason it cannot "
+    "be caught is the useful part.\n"
+    "\n"
+    "A hold that is really a tap changes what the *player* does and changes nothing any "
+    "check can see from outside the process: the script still runs, the menu still "
+    "confirms, a level still loads - which is what the "
+    "`application.scripted_playthrough` regex asserts - and the game still exits zero. "
+    "Walking 400 pixels instead of 3 leaves no trace in an exit code or on stderr, and "
+    "the one thing that would show it, a screenshot, is not something a ctest can take "
+    "without a window it would have to trust.\n"
+    "\n"
+    "Closing it needs an observable side channel in the shipped executable - the level "
+    "loader's line is the only one that exists - and inventing one to make a harness "
+    "score better would be a worse engine. The gap is in "
+    "[docs/gameplay.md](../../docs/gameplay.md) §5 with the rest.",
     # The comment goes on its own line rather than at the end of this one, because the
     # statement's semicolon is on this line and a trailing comment would eat it. That is
     # the whole reason the first version of this mutation was BUILD_REJECTED.
@@ -388,18 +399,44 @@ mutation(
     "a-respawn-does-not-restore-the-facing",
     "`PlayerSystem`'s respawn leaves the player's facing as it was, so a respawn after "
     "running left leaves the player facing left.",
-    "gameplay.a3_vertical_slice: *falling out of the world respawns the player*, which "
-    "resets `scale.x` and reads it back, and player.behaviour's respawn groups.\n"
+    "gameplay.a3_vertical_slice: *falling out of the world respawns the player*, which runs "
+    "left before it falls and reads `scale.x` back, and player.behaviour's respawn groups.\n"
     "\n"
-    "The first version of this mutation tried to make the *scene* inherit the flag from a "
-    "previous scene, which is not valid C++ - `m_paused` is declared after the thing that "
-    "would read it. Phase 19 already covers the shared-flag mistake properly; this is "
-    "the integration-level leak instead, and it is one a real run hits every time a "
-    "player falls.",
+    "The first version of this group could not have seen it: the player had never moved, so "
+    "their facing was already right and restoring it was a no-op. Running left first is "
+    "what makes the assertion mean something.",
     [patch(f"{SRC}/systems/PlayerSystem.cpp",
            "    transform.scale = Vec2{1.0F, 1.0F};",
-           "    // MUTATION: the facing survives a respawn\n"
-           "    transform.scale.x = std::abs(transform.scale.x);")],
+           "    // MUTATION: the facing is not restored at all")],
+)
+
+mutation(
+    "a-respawn-resets-the-facing-to-whatever-it-was",
+    "`PlayerSystem`'s respawn takes the absolute value of the facing instead of setting it, "
+    "which reads like a reset and is not one.",
+    "PROVEN EQUIVALENT, and the proof is a property of the engine rather than of the tests.\n"
+    "\n"
+    "`PlayerSystem` writes `Transform::scale.x` in exactly two places: the spawn-time "
+    "default of `Vec2{1.0F, 1.0F}` that `LevelLoader` puts on the entity, and "
+    "`movingRight ? 1.0F : -1.0F` in the facing block. So at every instant of every frame "
+    "`scale.x` is either `+1` or `-1` and nothing else. `abs` maps both to `+1`, which is "
+    "exactly what `Vec2{1.0F, 1.0F}` sets, and `scale.y` is untouched by either version. "
+    "The two are therefore observationally identical everywhere, and no group could "
+    "distinguish them even in principle.\n"
+    "\n"
+    "It is in the harness because it is the mutation that **looks** like the previous one. "
+    "A reset written as an `abs` is a plausible edit, it reads as \"reset the facing\", and "
+    "a harness that only listed its successes would report twenty detections when it has "
+    "nineteen and one fact.",
+    [patch(f"{SRC}/systems/PlayerSystem.cpp",
+           "    transform.scale = Vec2{1.0F, 1.0F};",
+           "    transform.scale.x = std::abs(transform.scale.x); // MUTATION: looks like a reset")],
+    equivalent="`PlayerSystem` writes `Transform::scale.x` in exactly two places - the "
+               "spawn-time default `Vec2{1.0F, 1.0F}` from `LevelLoader`, and "
+               "`movingRight ? 1.0F : -1.0F` in the facing block - so `scale.x` is always "
+               "`+1` or `-1` and nothing else. `abs` maps both to `+1`, which is what the "
+               "assignment sets, and `scale.y` is untouched by either version. The two "
+               "are identical at every instant of every frame.",
 )
 
 mutation(
